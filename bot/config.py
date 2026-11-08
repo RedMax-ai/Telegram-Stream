@@ -34,7 +34,7 @@ class Telegram:
     BOT_TOKEN = getenv("BOT_TOKEN", "9163410676:AAEdIeCpfjQc0CVaOvTQqidaEesRjtt7dm4")
     PORT = int(getenv("PORT", 7860) or 7860)
     SESSION_STRING = getenv("SESSION_STRING", "")
-    BASE_URL = getenv("BASE_URL", "").rstrip('/')
+    BASE_URL = getenv("BASE_URL", "https://darkpaki-stream.onrender.com").rstrip('/')
     DATABASE_URL = getenv("DATABASE_URL", "mongodb+srv://ffxani531_db_user:Darkpaki123@cluster0.tmmbyls.mongodb.net/?retryWrites=true&w=majority")
     AUTH_CHANNEL = [channel.strip() for channel in getenv("AUTH_CHANNEL", "-1003904027623").split(",") if channel.strip()]
     BIN_CHANNEL = getenv("BIN_CHANNEL", "").strip() or (AUTH_CHANNEL[0] if AUTH_CHANNEL else "-1003904027623")

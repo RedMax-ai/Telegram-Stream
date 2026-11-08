@@ -1,0 +1,24 @@
+name: 24/7 Render Anti-Sleep Keepalive
+
+on:
+  schedule:
+    # Run every 5 minutes to prevent Render free instance from spinning down
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Render Stream Server
+        run: |
+          echo "Sending external keepalive ping to https://darkpaki-stream.onrender.com/favicon.ico..."
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" --max-time 30 https://darkpaki-stream.onrender.com/favicon.ico || echo "000")
+          echo "Response HTTP Status: $STATUS"
+          if [ "$STATUS" -ge 200 ] && [ "$STATUS" -lt 400 ]; then
+            echo "Render service is AWAKE and responding successfully!"
+          else
+            echo "Service may be cold, retrying wakeup ping..."
+            sleep 10
+            curl -s -o /dev/null -w "%{http_code}\n" --max-time 60 https://darkpaki-stream.onrender.com/favicon.ico || true
+          fi

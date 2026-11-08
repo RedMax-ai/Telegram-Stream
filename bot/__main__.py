@@ -98,18 +98,45 @@ async def start_services():
 
 
 async def keep_alive_task():
-    """Pings server every 10 minutes to prevent cloud sleep / spin down."""
+    """
+    24/7 Anti-Sleep Public Keep-Alive Engine.
+    Render free instances spin down after 15 minutes of zero EXTERNAL traffic.
+    Pinging localhost (127.0.0.1) does NOT reset Render's edge counter.
+    We ping the public HTTPS URL every 3 minutes (180s) to guarantee
+    Render's load balancer always registers active incoming traffic.
+    """
     import aiohttp
-    LOGGER.info("24/7 Self-Keepalive task activated (Anti-Sleep)")
+    import os
+
+    render_host = os.getenv("RENDER_EXTERNAL_HOSTNAME", "").strip()
+    if render_host:
+        base = f"https://{render_host}"
+    elif Telegram.BASE_URL:
+        base = Telegram.BASE_URL
+    else:
+        base = "https://darkpaki-stream.onrender.com"
+
+    ping_urls = [
+        f"{base.rstrip('/')}/favicon.ico",
+        f"http://127.0.0.1:{Telegram.PORT}/favicon.ico"
+    ]
+    LOGGER.info(f"24/7 Anti-Sleep Keep-Alive activated targeting: {ping_urls[0]}")
+
+    # Wait 45s after startup before initiating pings
+    await asleep(45)
+
     while True:
-        await asleep(10 * 60) # 10 minutes
-        try:
-            target_url = f"http://127.0.0.1:{Telegram.PORT}/favicon.ico"
-            async with aiohttp.ClientSession() as session:
-                async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    LOGGER.debug(f"Keepalive ping response: {resp.status}")
-        except Exception as e:
-            LOGGER.debug(f"Keepalive ping note: {e}")
+        for url in ping_urls:
+            try:
+                timeout = aiohttp.ClientTimeout(total=15)
+                async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with session.get(url, headers={"User-Agent": "SurfTG-AntiSleep/2.0"}) as resp:
+                        LOGGER.info(f"[Anti-Sleep] Ping {url} -> HTTP {resp.status}")
+            except Exception as e:
+                LOGGER.debug(f"[Anti-Sleep] Ping note for {url}: {e}")
+
+        # Sleep for 3 minutes (180 seconds) - keeps Render 24/7 awake!
+        await asleep(180)
 
 
 async def cache_cleanup_task():
