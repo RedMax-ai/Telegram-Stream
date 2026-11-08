@@ -11,8 +11,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
-# Cache configuration
-CACHE_DIR = Path("cache/subtitles")
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+CACHE_DIR = ROOT_DIR / "cache" / "subtitles"
 CACHE_TTL_DAYS = 7  # Subtitle files are kept for 7 days
 
 

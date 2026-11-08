@@ -1,4 +1,17 @@
-from asyncio import get_event_loop, sleep as asleep, gather
+import sys
+import asyncio
+
+if sys.platform != "win32":
+    try:
+        import uvloop
+        uvloop.install()
+    except ImportError:
+        pass
+
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+from asyncio import sleep as asleep, gather
 from traceback import format_exc
 
 from aiohttp import web
@@ -14,39 +27,50 @@ from bot.helper.subtitle_cache import subtitle_cache
 
 LOGGER.info(f"Media cache module loaded, enabled={media_cache.enabled}")
 
-import uvloop
-import asyncio
-uvloop.install()
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
 async def start_services():
     LOGGER.info(f'Initializing Surf-TG v-{__version__}')
-    await asleep(1.2)
+    await asleep(0.5)
     
+    # Synchronize Pyrogram event loops with running asyncio loop
+    active_loop = asyncio.get_running_loop()
+    for client in (StreamBot, UserBot):
+        if client:
+            client.loop = active_loop
+            if hasattr(client, 'dispatcher') and client.dispatcher:
+                client.dispatcher.loop = active_loop
+
     # Initialize Database Indexes
     from bot.helper.database import Database
     await Database().create_indexes()
     
-    await StreamBot.start()
-    StreamBot.username = StreamBot.me.username
-    LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
-    if len(Telegram.SESSION_STRING) != 0:
-        await UserBot.start()
-        UserBot.username = UserBot.me.username or UserBot.me.first_name or UserBot.me.id
-        LOGGER.info(f"User Client : {UserBot.username}")
+    bot_connected = False
+    if Telegram.BOT_TOKEN and Telegram.API_ID and Telegram.API_HASH:
+        try:
+            await StreamBot.start()
+            StreamBot.username = StreamBot.me.username
+            LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
+            bot_connected = True
+            if len(Telegram.SESSION_STRING) != 0:
+                await UserBot.start()
+                UserBot.username = UserBot.me.username or UserBot.me.first_name or UserBot.me.id
+                LOGGER.info(f"User Client : {UserBot.username}")
+        except Exception as e:
+            LOGGER.warning(f"Telegram client startup skipped/failed: {e}")
+    else:
+        LOGGER.info("Telegram credentials not configured. Running in Web/Standalone Mode.")
     
-    await asleep(1.2)
-    LOGGER.info("Initializing Multi Clients")
-    await initialize_clients()
+    if bot_connected:
+        await asleep(0.5)
+        LOGGER.info("Initializing Multi Clients")
+        await initialize_clients()
     
-    await asleep(2)
-    LOGGER.info('Initalizing Surf Web Server..')
+    await asleep(0.5)
+    LOGGER.info('Initializing Surf Web Server..')
     server = web.AppRunner(await web_server())
     LOGGER.info("Server CleanUp!")
     await server.cleanup()
     
-    await asleep(2)
+    await asleep(0.5)
     LOGGER.info("Server Setup Started !")
     
     await server.setup()
@@ -80,9 +104,13 @@ async def cache_cleanup_task():
             LOGGER.error(f"Cache cleanup error: {e}")
 
 async def stop_clients():
-    await StreamBot.stop()
-    if len(Telegram.SESSION_STRING) != 0:
-        await UserBot.stop()
+    try:
+        if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+            await StreamBot.stop()
+        if len(Telegram.SESSION_STRING) != 0 and hasattr(UserBot, "is_connected") and UserBot.is_connected:
+            await UserBot.stop()
+    except Exception:
+        pass
 
 
 if __name__ == '__main__':

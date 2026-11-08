@@ -7,20 +7,57 @@ db = Database()
 
 async def get_chats():
     AUTH_CHANNEL = await db.get_variable('auth_channel')
-    if AUTH_CHANNEL is None or AUTH_CHANNEL.strip() == '':
-        AUTH_CHANNEL = Telegram.AUTH_CHANNEL
+    if AUTH_CHANNEL is None or str(AUTH_CHANNEL).strip() == '':
+        channels_list = Telegram.AUTH_CHANNEL
     else:
-        AUTH_CHANNEL = [channel.strip() for channel in AUTH_CHANNEL.split(",")]
+        channels_list = [channel.strip() for channel in str(AUTH_CHANNEL).split(",") if channel.strip()]
     
-    return [{"chat-id": chat.id, "title": chat.title or chat.first_name, "type": chat.type.name} for chat in await gather(*[create_task(StreamBot.get_chat(int(channel_id))) for channel_id in AUTH_CHANNEL])]
+    if not channels_list:
+        return []
+
+    result = []
+    for channel_id in channels_list:
+        try:
+            cid = int(channel_id)
+            if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+                chat = await StreamBot.get_chat(cid)
+                result.append({
+                    "chat-id": chat.id,
+                    "title": chat.title or chat.first_name or f"Channel {cid}",
+                    "type": getattr(chat.type, 'name', 'CHANNEL')
+                })
+            else:
+                result.append({
+                    "chat-id": cid,
+                    "title": f"Channel {cid}",
+                    "type": "CHANNEL"
+                })
+        except Exception:
+            result.append({
+                "chat-id": int(channel_id) if channel_id.lstrip('-').isdigit() else 0,
+                "title": f"Channel {channel_id}",
+                "type": "CHANNEL"
+            })
+    return result
 
 
 async def posts_chat(channels):
+    if not channels:
+        return """
+        <div class="col-span-full p-8 rounded-2xl glass-panel text-center border border-white/10">
+            <div class="size-14 rounded-2xl bg-primary/10 text-primary mx-auto flex items-center justify-center mb-3">
+                <span class="material-symbols-outlined text-3xl">podcasts</span>
+            </div>
+            <h3 class="text-white font-bold text-base mb-1">No Channels Connected</h3>
+            <p class="text-slate-400 text-xs max-w-md mx-auto mb-4">Set your channel ID (e.g. -1003904027623) in Storage Settings or config.env, or upload a media file above to stream directly.</p>
+            <button type="button" onclick="openStorageConfigModal()" class="px-4 py-2 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs font-semibold shadow-lg shadow-primary/25 transition-all">Configure Channel</button>
+        </div>
+        """
     phtml = """
     <div class="glass-panel text-center p-6 rounded-2xl hover:bg-white/5 transition-all duration-300 group relative overflow-hidden">
         <a href="/channel/{cid}" class="block">
              <div class="w-24 h-24 mx-auto mb-4 relative rounded-full p-1 bg-gradient-to-br from-primary to-purple-600 shadow-xl shadow-primary/20 group-hover:shadow-primary/40 transition-shadow">
-                 <img src="{img}" loading="lazy" class="w-full h-full rounded-full object-cover border-2 border-background-dark/50" alt="{title}">
+                 <img src="{img}" onerror="this.onerror=null;this.src='https://ui-avatars.com/api/?name={title}&background=6366f1&color=fff';" loading="lazy" class="w-full h-full rounded-full object-cover border-2 border-background-dark/50" alt="{title}">
              </div>
              <h3 class="text-white font-bold text-lg mb-1 truncate px-2">{title}</h3>
              <span class="inline-block px-3 py-1 rounded-full bg-white/5 text-primary text-xs font-semibold uppercase tracking-wider border border-white/5">
@@ -35,18 +72,23 @@ async def posts_chat(channels):
 async def post_playlist(playlists):
     dhtml = """
     <div class="glass-panel text-center p-6 rounded-2xl hover:bg-white/5 transition-all duration-300 group relative">
-        <a href="" onclick="openEditPopupForm(event, '{img}', '{ctype}', '{cid}', '{title}')"
-            class="admin-only absolute top-3 right-3 p-2 rounded-lg bg-black/40 text-gray-400 hover:text-white hover:bg-primary z-10 transition-colors" 
-            data-bs-toggle="modal" data-bs-target="#editFolderModal">
-            <span class="material-symbols-outlined text-sm">edit</span>
-        </a>
+        <button type="button" onclick="openEditPopupForm(event, '{img}', '{ctype}', '{cid}', '{title}')"
+            class="admin-only absolute top-3 right-3 p-1.5 rounded-lg bg-black/50 text-gray-400 hover:text-white hover:bg-primary z-20 transition-colors" 
+            title="Edit Folder">
+            <span class="material-symbols-outlined text-[16px]">edit</span>
+        </button>
+        <button type="button" onclick="confirmDeleteFolder(event, '{cid}', '{ctype}')"
+            class="admin-only absolute top-3 left-3 p-1.5 rounded-lg bg-black/50 text-red-400 hover:text-white hover:bg-red-600 z-20 transition-colors" 
+            title="Delete Folder">
+            <span class="material-symbols-outlined text-[16px]">delete</span>
+        </button>
 
         <a href="/playlist?db={cid}" class="block">
-             <div class="w-24 h-24 mx-auto mb-4 relative rounded-2xl p-1 bg-gradient-to-br from-yellow-500/80 to-orange-600/80 shadow-lg group-hover:scale-105 transition-transform">
-                 <img src="{img}" loading="lazy" class="w-full h-full rounded-xl object-cover shadow-inner" alt="{title}">
+             <div class="w-24 h-24 mx-auto mb-4 relative rounded-2xl p-1 bg-gradient-to-br from-yellow-500/80 to-orange-600/80 shadow-lg group-hover:scale-105 transition-transform flex items-center justify-center overflow-hidden">
+                 <img src="{img}" onerror="this.onerror=null;this.src='https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200&auto=format&fit=crop&q=60';" loading="lazy" class="w-full h-full rounded-xl object-cover shadow-inner" alt="{title}">
              </div>
              
-             <h3 class="text-white font-bold text-lg mb-1 truncate px-2">{title}</h3>
+             <h3 class="text-white font-bold text-lg mb-1 truncate px-2" title="{title}">{title}</h3>
              <span class="inline-flex items-center gap-1 px-3 py-1 rounded-full bg-white/5 text-yellow-500 text-xs font-medium border border-white/5">
                 <span class="material-symbols-outlined text-[14px]">folder</span> Folder
              </span>
@@ -54,7 +96,12 @@ async def post_playlist(playlists):
     </div>
     """
 
-    return ''.join(dhtml.format(cid=playlist["_id"], img=playlist["thumbnail"], title=playlist["name"], ctype=playlist['parent_folder']) for playlist in playlists)
+    return ''.join(dhtml.format(
+        cid=playlist["_id"],
+        img=playlist.get("thumbnail") or "https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=200&auto=format&fit=crop&q=60",
+        title=playlist.get("name", "Untitled Folder"),
+        ctype=playlist.get('parent_folder', 'root')
+    ) for playlist in playlists)
 
 
 async def posts_db_file(posts):
@@ -91,12 +138,18 @@ async def posts_db_file(posts):
                 {size}
              </div>
 
-            <a href=""
+            <button type="button"
                 onclick="openPostEditPopupForm(event, '{img}', '{type}', '{size}', '{title}', '{cid}', '{ctype}')"
                 class="admin-only absolute top-2 right-2 p-1.5 rounded bg-black/50 text-white hover:bg-primary transition-colors z-20" 
-                data-bs-toggle="modal" data-bs-target="#editModal">
+                title="Edit File">
                 <span class="material-symbols-outlined text-[16px]">edit</span>
-            </a>
+            </button>
+            <button type="button"
+                onclick="confirmDeleteFolder(event, '{cid}', '{ctype}')"
+                class="admin-only absolute top-2 left-2 p-1.5 rounded bg-black/50 text-red-400 hover:text-white hover:bg-red-600 transition-colors z-20" 
+                title="Delete File">
+                <span class="material-symbols-outlined text-[16px]">delete</span>
+            </button>
         </a>
         
         <div class="p-3">

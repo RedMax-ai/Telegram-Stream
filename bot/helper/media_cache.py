@@ -12,7 +12,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, Set
 
-from pymongo import MongoClient, ASCENDING
+try:
+    from pymongo import MongoClient, ASCENDING
+except ImportError:
+    MongoClient = None
+    ASCENDING = 1
 from bot.config import Telegram
 
 # Supported media types for caching
@@ -27,6 +31,162 @@ CACHEABLE_MIMETYPES = {
     'audio/mpeg', 'audio/mp4', 'audio/flac', 'audio/wav', 
     'audio/ogg', 'audio/aac'
 }
+
+
+import sqlite3
+
+class SQLiteCacheCollection:
+    def __init__(self, db_path=None):
+        if not db_path:
+            self.db_path = str(Path(__file__).resolve().parent.parent.parent / "surftg.db")
+        else:
+            self.db_path = db_path
+        self._init()
+        
+    def _init(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS media_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cache_key TEXT UNIQUE,
+                    file_path TEXT,
+                    file_size INTEGER DEFAULT 0,
+                    mime_type TEXT,
+                    file_name TEXT,
+                    access_count INTEGER DEFAULT 1,
+                    last_access TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    score REAL DEFAULT 0.0
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_key ON media_cache(cache_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_score ON media_cache(score)")
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
+
+    def create_index(self, *args, **kwargs):
+        pass
+
+    def find_one(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            if "cache_key" in filter_dict:
+                cur = conn.execute("SELECT * FROM media_cache WHERE cache_key = ?", (filter_dict["cache_key"],))
+                row = cur.fetchone()
+                return dict(row) if row else None
+        return None
+
+    def find(self, filter_dict=None, projection=None):
+        class Cursor:
+            def __init__(self, db_path, filter_dict):
+                self.db_path = db_path
+                self.filter_dict = filter_dict or {}
+                self._sort_field = "rowid"
+                self._sort_dir = "ASC"
+                self._limit = None
+
+            def sort(self, field, direction=1):
+                self._sort_field = field if field in ("score", "last_access", "access_count", "file_size") else "rowid"
+                self._sort_dir = "DESC" if direction == -1 else "ASC"
+                return self
+
+            def limit(self, n):
+                self._limit = n
+                return self
+
+            def __iter__(self):
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    sql = f"SELECT * FROM media_cache ORDER BY {self._sort_field} {self._sort_dir}"
+                    if self._limit:
+                        sql += f" LIMIT {self._limit}"
+                    cur = conn.execute(sql)
+                    for r in cur.fetchall():
+                        d = dict(r)
+                        d['_id'] = d.get('cache_key')
+                        if isinstance(d.get('last_access'), str):
+                            try:
+                                d['last_access'] = datetime.fromisoformat(d['last_access'])
+                            except Exception:
+                                pass
+                        yield d
+
+        return Cursor(self.db_path, filter_dict)
+
+    def count_documents(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute("SELECT COUNT(*) FROM media_cache")
+            return cur.fetchone()[0]
+
+    def update_one(self, filter_dict, update_dict, upsert=False):
+        cache_key = filter_dict.get("cache_key") or filter_dict.get("_id")
+        set_vals = update_dict.get("$set", {})
+        inc_vals = update_dict.get("$inc", {})
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("SELECT * FROM media_cache WHERE cache_key = ?", (cache_key,))
+            existing = cur.fetchone()
+            if existing:
+                updates = []
+                params = []
+                for k, v in set_vals.items():
+                    updates.append(f"{k} = ?")
+                    params.append(str(v) if isinstance(v, (datetime, Path)) else v)
+                for k, v in inc_vals.items():
+                    updates.append(f"{k} = {k} + ?")
+                    params.append(v)
+                if updates:
+                    sql = f"UPDATE media_cache SET {', '.join(updates)} WHERE cache_key = ?"
+                    params.append(cache_key)
+                    conn.execute(sql, tuple(params))
+            elif upsert and cache_key:
+                cols = ["cache_key"]
+                vals = [cache_key]
+                for k, v in set_vals.items():
+                    cols.append(k)
+                    vals.append(str(v) if isinstance(v, (datetime, Path)) else v)
+                placeholders = ", ".join(["?"] * len(vals))
+                conn.execute(f"INSERT INTO media_cache ({', '.join(cols)}) VALUES ({placeholders})", tuple(vals))
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
+
+    def find_one_and_update(self, filter_dict, update_dict, return_document=False):
+        doc = self.find_one(filter_dict)
+        if doc:
+            self.update_one(filter_dict, update_dict)
+            if return_document:
+                return self.find_one(filter_dict)
+            return doc
+        return None
+
+    def delete_one(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            key = filter_dict.get("cache_key") or filter_dict.get("_id")
+            if key:
+                conn.execute("DELETE FROM media_cache WHERE cache_key = ?", (str(key),))
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
 
 
 class MediaCache:
@@ -56,14 +216,15 @@ class MediaCache:
             self.cache_dir = Path(Telegram.CACHE_DIR)
             self.max_size_bytes = Telegram.CACHE_MAX_SIZE_GB * 1024 * 1024 * 1024
             
-            # MongoDB connection
-            self.mongo_client = MongoClient(Telegram.DATABASE_URL)
-            self.db = self.mongo_client["surftg"]
-            self.collection = self.db["media_cache"]
-            
-            # Create indexes
-            self.collection.create_index("cache_key", unique=True)
-            self.collection.create_index([("score", ASCENDING)])
+            # Database connection
+            if Telegram.DATABASE_URL and ("mongodb://" in Telegram.DATABASE_URL or "mongodb+srv://" in Telegram.DATABASE_URL):
+                self.mongo_client = MongoClient(Telegram.DATABASE_URL)
+                self.db = self.mongo_client["surftg"]
+                self.collection = self.db["media_cache"]
+                self.collection.create_index("cache_key", unique=True)
+                self.collection.create_index([("score", ASCENDING)])
+            else:
+                self.collection = SQLiteCacheCollection()
             
             # Ensure cache directory exists
             self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -296,12 +457,19 @@ class MediaCache:
                     return True
         return False
     
-    def _calculate_score(self, access_count: int, last_access: datetime) -> float:
+    def _calculate_score(self, access_count: int, last_access: Any) -> float:
         """Calculate eviction score (lower = evict first)."""
-        # Base score from access count
-        score = access_count * self.K_FACTOR
+        score = (access_count or 1) * self.K_FACTOR
         
         # Add recency bonus (decays over time)
+        if isinstance(last_access, str):
+            try:
+                last_access = datetime.fromisoformat(last_access.replace(" ", "T"))
+            except Exception:
+                last_access = datetime.utcnow()
+        elif not isinstance(last_access, datetime):
+            last_access = datetime.utcnow()
+        
         hours_since_access = (datetime.utcnow() - last_access).total_seconds() / 3600
         recency_bonus = max(0, 100 - (hours_since_access / self.RECENCY_DECAY_HOURS * 10))
         
@@ -559,21 +727,22 @@ class MediaCache:
     async def cleanup(self) -> Dict[str, Any]:
         """Periodic cleanup task."""
         if not self.enabled:
-            return {"status": "disabled"}
+            return {"status": "disabled", "cache_size_gb": 0.0, "files_cached": 0}
         
         # Remove orphaned DB entries (file doesn't exist on disk)
         removed = 0
         for doc in self.collection.find():
-            if not os.path.exists(doc["file_path"]):
-                self.collection.delete_one({"_id": doc["_id"]})
+            fpath = doc.get("file_path")
+            if not fpath or not os.path.exists(fpath):
+                self.collection.delete_one({"_id": doc.get("_id")})
                 removed += 1
         
         # Recalculate all scores
         now = datetime.utcnow()
         for doc in self.collection.find():
-            new_score = self._calculate_score(doc["access_count"], doc["last_access"])
+            new_score = self._calculate_score(doc.get("access_count", 1), doc.get("last_access"))
             self.collection.update_one(
-                {"_id": doc["_id"]},
+                {"_id": doc.get("_id")},
                 {"$set": {"score": new_score}}
             )
         

@@ -71,7 +71,7 @@ async def get_files(chat_id, page=1):
 async def posts_file(posts, chat_id):
     phtml = """
     <div class="glass-panel rounded-xl overflow-hidden hover:shadow-xl hover:shadow-primary/10 transition-all duration-300 group relative">
-        <a href="/watch/{chat_id}?id={id}&hash={hash}" class="block relative aspect-video bg-gray-900 overflow-hidden cursor-pointer">
+        <a href="/watch/{chat_id}?id={id}&hash={hash}{key_param}" class="block relative aspect-video bg-gray-900 overflow-hidden cursor-pointer">
              <img src="{img}" loading="lazy" class="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105" alt="{title}">
              
              <!-- Gradient Overlay -->
@@ -90,7 +90,7 @@ async def posts_file(posts, chat_id):
         </a>
         
         <div class="p-3">
-            <a href="/watch/{chat_id}?id={id}&hash={hash}" class="block group-hover:text-primary transition-colors duration-200">
+            <a href="/watch/{chat_id}?id={id}&hash={hash}{key_param}" class="block group-hover:text-primary transition-colors duration-200">
                 <h3 class="text-white font-medium text-sm line-clamp-2 leading-snug min-h-[2.5rem]" title="{title}">{title}</h3>
             </a>
             
@@ -117,6 +117,7 @@ async def posts_file(posts, chat_id):
             type_display = post.get('type', 'FILE')
             badge_color = ""
             
+        key_param = f"&key={Telegram.STREAM_AUTH_KEY}" if Telegram.STREAM_AUTH_KEY else ""
         html_output += phtml.format(
             chat_id=str(chat_id).replace("-100", ""), 
             id=post["msg_id"], 
@@ -126,7 +127,8 @@ async def posts_file(posts, chat_id):
             size=post['size'], 
             type=post['type'],
             type_display=type_display,
-            badge_color=badge_color
+            badge_color=badge_color,
+            key_param=key_param
         )
         
     return html_output

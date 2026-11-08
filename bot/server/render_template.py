@@ -10,6 +10,7 @@ from bot.helper.exceptions import InvalidHash
 from bot.helper.file_size import get_readable_file_size
 from bot.server.file_properties import get_file_ids
 from bot.telegram import StreamBot
+from bot.helper.media_cache import media_cache
 
 db = Database()
 
@@ -40,7 +41,7 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
             _theme_cache = {'value': theme, 'time': time.time()}
     if theme is None or theme == '':
         theme = Telegram.THEME
-    tpath = ospath.join('bot', 'server', 'template')
+    tpath = ospath.join(ospath.dirname(__file__), 'template')
     
     # Pagination Logic
     prev_btn = ""
@@ -107,16 +108,31 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
             if not is_admin:
                 html += admin_block
     else:
-        file_data = await get_file_ids(StreamBot, chat_id=int(chat_id), message_id=int(id))
-        if file_data.unique_id[:6] != secure_hash:
-            LOGGER.info('Link hash: %s - %s', secure_hash,
-                        file_data.unique_id[:6])
-            LOGGER.info('Invalid hash for message with - ID %s', id)
-            raise InvalidHash
-        filename, tag, size = file_data.file_name, file_data.mime_type.split(
-            '/')[0].strip(), get_readable_file_size(file_data.file_size)
-        if filename is None:
-            filename = "Proper Filename is Missing"
+        file_data = None
+        if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+            try:
+                file_data = await get_file_ids(StreamBot, chat_id=int(chat_id), message_id=int(id))
+            except Exception as e:
+                LOGGER.warning('Could not get file ids from Telegram: %s', e)
+        
+        if file_data:
+            if file_data.unique_id[:6] != secure_hash:
+                LOGGER.info('Link hash: %s - %s', secure_hash, file_data.unique_id[:6])
+                raise InvalidHash
+            filename = file_data.file_name or "Proper Filename is Missing"
+            tag = file_data.mime_type.split('/')[0].strip() if file_data.mime_type else "video"
+            size = get_readable_file_size(file_data.file_size)
+        else:
+            cache_key = f"{chat_id}:{id}:{secure_hash}"
+            doc = media_cache.collection.find_one({"cache_key": cache_key}) if media_cache.collection else None
+            if doc:
+                filename = doc.get("file_name", f"Video_{id}")
+                tag = doc.get("mime_type", "video/mp4").split('/')[0].strip()
+                size = get_readable_file_size(doc.get("file_size", 0))
+            else:
+                filename = f"Stream_File_{id}"
+                tag = "video"
+                size = "Available"
         filename = re.sub(r'[,|_\',]', ' ', filename)
         
         # Series/Part Detection & Playlist Generation
@@ -204,7 +220,8 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
         if tag == 'video':
             async with aiopen(ospath.join(tpath, 'video.html')) as r:
                 poster = f"/api/thumb/{chat_id}?id={id}"
-                html = (await r.read()).replace('<!-- Filename -->', filename).replace("<!-- Theme -->", theme.lower()).replace('<!-- Poster -->', poster).replace('<!-- Size -->', size).replace('<!-- Username -->', StreamBot.me.username).replace('<!-- Playlist -->', playlist_html).replace('<!-- ID -->', str(id))
+                bot_user = getattr(getattr(StreamBot, 'me', None), 'username', '') or getattr(StreamBot, 'username', 'TelegramStreamBot')
+                html = (await r.read()).replace('<!-- Filename -->', filename).replace("<!-- Theme -->", theme.lower()).replace('<!-- Poster -->', poster).replace('<!-- Size -->', size).replace('<!-- Username -->', bot_user).replace('<!-- Playlist -->', playlist_html).replace('<!-- ID -->', str(id))
         else:
             async with aiopen(ospath.join(tpath, 'dl.html')) as r:
                 html = (await r.read()).replace('<!-- Filename -->', filename).replace("<!-- Theme -->", theme.lower()).replace('<!-- Size -->', size)

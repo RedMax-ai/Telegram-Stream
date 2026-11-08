@@ -43,12 +43,21 @@ def group_posts_by_series(posts, title_key='title'):
     
     return grouped_posts
 
-import orjson
+try:
+    import orjson
+    def json_dumps(data):
+        """Fast JSON serialization using orjson."""
+        return orjson.dumps(data).decode('utf-8')
 
-def json_dumps(data):
-    """Fast JSON serialization using orjson."""
-    return orjson.dumps(data).decode('utf-8')
+    def json_loads(data):
+        """Fast JSON deserialization using orjson."""
+        return orjson.loads(data)
+except ImportError:
+    import json
+    def json_dumps(data):
+        """JSON serialization fallback using stdlib json."""
+        return json.dumps(data)
 
-def json_loads(data):
-    """Fast JSON deserialization using orjson."""
-    return orjson.loads(data)
+    def json_loads(data):
+        """JSON deserialization fallback using stdlib json."""
+        return json.loads(data)
