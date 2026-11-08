@@ -95,7 +95,12 @@ def is_stream_access_allowed(request: web.Request, session: dict = None) -> bool
 @routes.get('/login')
 async def login_form(request):
     session = await get_session(request)
-    redirect_url = session.get('redirect_url', '/')
+    if 'user' in session:
+        return web.HTTPFound('/')
+    raw_redirect = session.get('redirect_url', '/')
+    redirect_url = str(raw_redirect).strip()
+    if not redirect_url or redirect_url == '/login' or '{' in redirect_url or not redirect_url.startswith('/'):
+        redirect_url = '/'
     return web.Response(text=await render_page(None, None, route='login', redirect_url=redirect_url), content_type='text/html')
 
 
@@ -124,9 +129,10 @@ async def login_route(request):
     if valid_user or valid_admin:
         rate_limiter.reset_login_failures(client_ip)
         session['user'] = username
-        redirect_url = data.get('redirect_url') or session.get('redirect_url') or '/'
+        raw_redirect = data.get('redirect_url') or session.get('redirect_url') or '/'
         session.pop('redirect_url', None)
-        if not redirect_url or redirect_url == '/login':
+        redirect_url = str(raw_redirect).strip()
+        if not redirect_url or redirect_url == '/login' or '{' in redirect_url or not redirect_url.startswith('/'):
             redirect_url = '/'
         return web.HTTPFound(redirect_url)
     else:

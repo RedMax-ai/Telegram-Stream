@@ -92,8 +92,13 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
     # Note: verify updateParam doesn't duplicate if added twice (it won't because script ID or simple re-def is fine in HTML body)
     
     if route == 'login':
+        clean_redirect = redirect_url if (redirect_url and not str(redirect_url).startswith('/login') and '{' not in str(redirect_url)) else '/'
         async with aiopen(ospath.join(tpath, 'login.html'), 'r') as f:
-            html = (await f.read()).replace("<!-- Error -->", msg or '').replace("<!-- Theme -->", theme.lower()).replace("<!-- RedirectURL -->", redirect_url)
+            html = (await f.read()
+                    ).replace("<!-- Error -->", msg or ''
+                    ).replace("<!-- Theme -->", theme.lower()
+                    ).replace("<!-- RedirectURL -->", clean_redirect
+                    ).replace("{{ redirect_url }}", clean_redirect)
     elif route == 'home':
         async with aiopen(ospath.join(tpath, 'home.html'), 'r') as f:
             html = (await f.read()).replace("<!-- Print -->", html).replace("<!-- Theme -->", theme.lower()).replace("<!-- Playlist -->", playlist)
