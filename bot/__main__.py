@@ -29,9 +29,15 @@ LOGGER.info(f"Media cache module loaded, enabled={media_cache.enabled}")
 
 async def start_services():
     LOGGER.info(f'Initializing Surf-TG v-{__version__}')
-    await asleep(0.5)
     
-    # Synchronize Pyrogram event loops with running asyncio loop
+    # 1. START WEB SERVER FIRST (Instant port binding for Render & Cloud zero-downtime)
+    LOGGER.info('Starting Web Server immediately on port %s...', Telegram.PORT)
+    server = web.AppRunner(await web_server())
+    await server.setup()
+    await web.TCPSite(server, '0.0.0.0', Telegram.PORT).start()
+    LOGGER.info("Surf Web Server Online & Listening on 0.0.0.0:%s !", Telegram.PORT)
+    
+    # 2. Synchronize Pyrogram event loops with running asyncio loop
     active_loop = asyncio.get_running_loop()
     for client in (StreamBot, UserBot):
         if client:
@@ -39,58 +45,71 @@ async def start_services():
             if hasattr(client, 'dispatcher') and client.dispatcher:
                 client.dispatcher.loop = active_loop
 
-    # Initialize Database Indexes
-    from bot.helper.database import Database
-    await Database().create_indexes()
-    
-    bot_connected = False
-    if Telegram.BOT_TOKEN and Telegram.API_ID and Telegram.API_HASH:
+    # 3. Asynchronously initialize Database Indexes & Telegram Clients in Background
+    async def init_backend():
         try:
-            await StreamBot.start()
-            StreamBot.username = StreamBot.me.username
-            LOGGER.info(f"Bot Client : [@{StreamBot.username}]")
-            bot_connected = True
-            if len(Telegram.SESSION_STRING) != 0:
-                await UserBot.start()
-                UserBot.username = UserBot.me.username or UserBot.me.first_name or UserBot.me.id
-                LOGGER.info(f"User Client : {UserBot.username}")
+            from bot.helper.database import Database
+            await Database().create_indexes()
+            LOGGER.info("Database indexes ready.")
         except Exception as e:
-            LOGGER.warning(f"Telegram client startup skipped/failed: {e}")
-    else:
-        LOGGER.info("Telegram credentials not configured. Running in Web/Standalone Mode.")
-    
-    if bot_connected:
-        await asleep(0.5)
-        LOGGER.info("Initializing Multi Clients")
-        await initialize_clients()
-    
-    await asleep(0.5)
-    LOGGER.info('Initializing Surf Web Server..')
-    server = web.AppRunner(await web_server())
-    LOGGER.info("Server CleanUp!")
-    await server.cleanup()
-    
-    await asleep(0.5)
-    LOGGER.info("Server Setup Started !")
-    
-    await server.setup()
-    await web.TCPSite(server, '0.0.0.0', Telegram.PORT).start()
+            LOGGER.warning(f"Database index creation error: {e}")
+            
+        bot_connected = False
+        if Telegram.BOT_TOKEN and Telegram.API_ID and Telegram.API_HASH:
+            try:
+                LOGGER.info("Connecting Telegram Bot client...")
+                await StreamBot.start()
+                StreamBot.username = StreamBot.me.username
+                LOGGER.info(f"Bot Client connected: [@{StreamBot.username}]")
+                bot_connected = True
+                if len(Telegram.SESSION_STRING) != 0:
+                    await UserBot.start()
+                    UserBot.username = UserBot.me.username or UserBot.me.first_name or UserBot.me.id
+                    LOGGER.info(f"User Client connected: {UserBot.username}")
+            except Exception as e:
+                LOGGER.warning(f"Telegram client startup skipped/failed: {e}")
+        else:
+            LOGGER.info("Telegram credentials not configured. Running in Web/Standalone Mode.")
+        
+        if bot_connected:
+            LOGGER.info("Initializing Multi Clients...")
+            try:
+                await initialize_clients()
+            except Exception as e:
+                LOGGER.warning(f"Multi-client init error: {e}")
+                
+        # Start cache cleanup background tasks
+        if media_cache.enabled:
+            loop.create_task(cache_cleanup_task())
+            LOGGER.info(f"Media cache enabled: max {Telegram.CACHE_MAX_SIZE_GB}GB at {media_cache.cache_dir}")
+        else:
+            LOGGER.info("Media cache is disabled")
+            
+        loop.create_task(subtitle_cache.periodic_cleanup())
+        LOGGER.info("Subtitle cache cleanup task started")
+        
+        # 4. Anti-Sleep 24/7 Keep-Alive Pinger (Prevents free tier spin down)
+        loop.create_task(keep_alive_task())
 
+    loop.create_task(init_backend())
+    
     LOGGER.info("Surf-TG Started Revolving !")
-    
-    # Start cache cleanup background task
-    LOGGER.info(f"Checking media cache status: enabled={media_cache.enabled}")
-    if media_cache.enabled:
-        loop.create_task(cache_cleanup_task())
-        LOGGER.info(f"Media cache enabled: max {Telegram.CACHE_MAX_SIZE_GB}GB at {media_cache.cache_dir}")
-    else:
-        LOGGER.info("Media cache is disabled")
-    
-    # Start subtitle cache cleanup background task
-    loop.create_task(subtitle_cache.periodic_cleanup())
-    LOGGER.info("Subtitle cache cleanup task started")
-    
     await idle()
+
+
+async def keep_alive_task():
+    """Pings server every 10 minutes to prevent cloud sleep / spin down."""
+    import aiohttp
+    LOGGER.info("24/7 Self-Keepalive task activated (Anti-Sleep)")
+    while True:
+        await asleep(10 * 60) # 10 minutes
+        try:
+            target_url = f"http://127.0.0.1:{Telegram.PORT}/favicon.ico"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(target_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    LOGGER.debug(f"Keepalive ping response: {resp.status}")
+        except Exception as e:
+            LOGGER.debug(f"Keepalive ping note: {e}")
 
 
 async def cache_cleanup_task():
@@ -98,28 +117,18 @@ async def cache_cleanup_task():
     while True:
         await asleep(30 * 60)  # 30 minutes
         try:
-            result = await media_cache.cleanup()
-            LOGGER.info(f"Cache stats: {result['files_cached']} files, {result['cache_size_gb']:.2f}GB used")
+            LOGGER.info("Running scheduled cache cleanup...")
+            media_cache.cleanup_expired()
+            LOGGER.info("Scheduled cache cleanup completed")
         except Exception as e:
-            LOGGER.error(f"Cache cleanup error: {e}")
-
-async def stop_clients():
-    try:
-        if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
-            await StreamBot.stop()
-        if len(Telegram.SESSION_STRING) != 0 and hasattr(UserBot, "is_connected") and UserBot.is_connected:
-            await UserBot.stop()
-    except Exception:
-        pass
+            LOGGER.error(f"Error in cache cleanup task: {e}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         loop.run_until_complete(start_services())
     except KeyboardInterrupt:
-        LOGGER.info('Service Stopping...')
-    except Exception:
-        LOGGER.error(format_exc())
-    finally:
-        loop.run_until_complete(stop_clients())
-        loop.stop()
+        LOGGER.info("---------------- Service Stopped ----------------")
+    except Exception as e:
+        LOGGER.critical(format_exc())
+        LOGGER.critical("-------------- Service Terminated --------------")
