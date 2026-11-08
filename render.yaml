@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: tg-stream-cdn
+    env: docker
+    dockerfilePath: Dockerfile
+    plan: free
+    healthCheckPath: /api/status
+    envVars:
+      - key: PORT
+        value: 8080
+

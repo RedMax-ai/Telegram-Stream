@@ -4,6 +4,14 @@ import logging
 import math
 import mimetypes
 import secrets
+import hashlib
+import time
+import os
+import re
+from datetime import datetime
+from urllib.parse import quote
+from pathlib import Path
+import aiofiles
 from aiohttp import web
 from aiohttp.http_exceptions import BadStatusLine
 from bot.helper.chats import get_chats, post_playlist, posts_chat, posts_db_file
@@ -22,13 +30,66 @@ from bot.helper.cache import rm_cache
 from bot.helper.media_cache import media_cache
 from bot.helper.subtitle_cache import subtitle_cache
 from bot.helper.subtitle_extractor import extract_subtitle_from_telegram, get_subtitle_track_list, extract_subtitle_from_local_file
+from bot.helper.security import verify_password, rate_limiter, sanitize_input, validate_hash, is_admin_user
 
-from bot.telegram import StreamBot
+from bot.telegram import StreamBot, sync_client_loop
 
 class_cache = {}
 
 routes = web.RouteTableDef()
 db = Database()
+
+
+@routes.get('/favicon.ico')
+async def favicon_route(request: web.Request):
+    return web.Response(status=204)
+
+
+def get_base_url(request: web.Request) -> str:
+    if Telegram.BASE_URL:
+        return Telegram.BASE_URL.rstrip('/')
+    host = request.headers.get("Host") or request.host
+    scheme = request.headers.get("X-Forwarded-Proto") or request.scheme or "http"
+    return f"{scheme}://{host}"
+
+
+def is_stream_access_allowed(request: web.Request, session: dict = None) -> bool:
+    """
+    Validates stream and watch player authorization.
+    1. Active logged-in user/admin session -> always allowed
+    2. If STREAM_AUTH_KEY is configured:
+       - Checks ?key=... query param or X-Stream-Key header
+    3. If ALLOWED_DOMAINS is configured:
+       - Checks Referer / Origin header against domain whitelist
+    4. If neither STREAM_AUTH_KEY nor ALLOWED_DOMAINS is configured:
+       - Open access allowed (protected by cryptographic file hash)
+    """
+    if session and session.get('user'):
+        return True
+
+    # Check secret stream key
+    if Telegram.STREAM_AUTH_KEY:
+        req_key = request.query.get('key') or request.headers.get('X-Stream-Key')
+        if req_key and secrets.compare_digest(str(req_key), str(Telegram.STREAM_AUTH_KEY)):
+            return True
+
+    # Check allowed domain / referer (Anti-Hotlinking)
+    if Telegram.ALLOWED_DOMAINS:
+        referer = request.headers.get('Referer') or request.headers.get('Origin')
+        if referer:
+            try:
+                from urllib.parse import urlparse
+                ref_host = urlparse(referer).netloc.lower().split(':')[0]
+                for allowed in Telegram.ALLOWED_DOMAINS:
+                    if ref_host == allowed or ref_host.endswith('.' + allowed):
+                        return True
+            except Exception:
+                pass
+
+    if not Telegram.STREAM_AUTH_KEY and not Telegram.ALLOWED_DOMAINS:
+        return True
+
+    return False
 
 
 @routes.get('/login')
@@ -43,11 +104,21 @@ async def login_route(request):
     session = await get_session(request)
     if 'user' in session:
         return web.HTTPFound('/')
+    
+    client_ip = request.remote or "unknown"
+    if rate_limiter.is_login_blocked(client_ip):
+        return web.Response(text=await render_page(None, None, route='login', msg="Too many failed login attempts. Please try again later."), content_type='text/html', status=429)
+
     data = await request.post()
-    username = data.get('username')
-    password = data.get('password')
+    username = (data.get('username') or '').strip()
+    password = data.get('password') or ''
     error_message = None
-    if (username == Telegram.USERNAME and password == Telegram.PASSWORD) or (username == Telegram.ADMIN_USERNAME and password == Telegram.ADMIN_PASSWORD):
+
+    valid_user = (username == Telegram.USERNAME and verify_password(password, Telegram.PASSWORD))
+    valid_admin = (username == Telegram.ADMIN_USERNAME and verify_password(password, Telegram.ADMIN_PASSWORD))
+
+    if valid_user or valid_admin:
+        rate_limiter.reset_login_failures(client_ip)
         session['user'] = username
         if 'redirect_url' not in session:
             session['redirect_url'] = '/'
@@ -55,6 +126,7 @@ async def login_route(request):
         del session['redirect_url']
         return web.HTTPFound(redirect_url)
     else:
+        rate_limiter.record_failed_login(client_ip)
         error_message = "Invalid username or password"
     return web.Response(text=await render_page(None, None, route='login', msg=error_message), content_type='text/html')
 
@@ -69,12 +141,12 @@ async def logout_route(request):
 @routes.post('/create')
 async def create_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.post()
-    folderName = data.get('folderName')
-    thumbnail = data.get('thumbnail')
-    parent_dir = data.get('parent_dir')
+    folderName = sanitize_input(data.get('folderName'))
+    thumbnail = sanitize_input(data.get('thumbnail'))
+    parent_dir = data.get('parent_dir') or 'root'
     parent_dir = parent_dir.split('db=')[-1] if 'db=' in parent_dir else 'root'
     await db.create_folder(parent_dir, folderName, thumbnail)
     if parent_dir == 'root':
@@ -86,11 +158,11 @@ async def create_route(request):
 @routes.post('/delete')
 async def delete_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.json()
     id = data.get('delete_id')
-    parent = data.get('parent')
+    parent = data.get('parent') or 'root'
     if not (success := await db.delete(id)):
         return web.HTTPInternalServerError()
     if parent == 'root':
@@ -102,13 +174,13 @@ async def delete_route(request):
 @routes.post('/edit')
 async def editFolder_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.post()
-    folderName = data.get('folderName')
-    thumbnail = data.get('thumbnail')
+    folderName = sanitize_input(data.get('folderName'))
+    thumbnail = sanitize_input(data.get('thumbnail'))
     id = data.get('folder_id')
-    parent = data.get('parent')
+    parent = data.get('parent') or 'root'
     success = await db.edit(id, folderName, thumbnail)
     if not success:
         return web.HTTPInternalServerError()
@@ -121,13 +193,13 @@ async def editFolder_route(request):
 @routes.post('/edit_post')
 async def editPost_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.post()
-    fileName = data.get('fileName')
-    thumbnail = data.get('filethumbnail')
+    fileName = sanitize_input(data.get('fileName'))
+    thumbnail = sanitize_input(data.get('filethumbnail'))
     id = data.get('file_id')
-    parent = data.get('file_folder_id')
+    parent = data.get('file_folder_id') or 'root'
     success = await db.edit(id, fileName, thumbnail)
     if not success:
         return web.HTTPInternalServerError()
@@ -140,8 +212,8 @@ async def editPost_route(request):
 @routes.get('/searchDbFol')
 async def searchDbFolder_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     query = request.query.get('query', '')
     folder_names = await db.search_DbFolder(query)
     return web.json_response(folder_names)
@@ -150,30 +222,34 @@ async def searchDbFolder_route(request):
 @routes.post('/send')
 async def send_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.post()
     chat_id = data.get('chatId')
     chat_id = f"-100{chat_id}"
     folder_id = data.get('folderId')
     selected_ids = data.get('selectedIds')
     if not all([chat_id, folder_id, selected_ids]):
-        return {'error': 'Missing required data in request'}
+        return web.json_response({'error': 'Missing required data in request'}, status=400)
 
     formatted_entries = []
     for entry in selected_ids.split(','):
-        file_id, hash, filename, size, file_type, thumbnail = entry.split('|')
-        formatted_entries.append({
-            'chat_id': chat_id,
-            'parent_folder': folder_id,
-            'file_id': file_id,
-            'hash': hash,
-            'name': filename,
-            'size': size,
-            'file_type': file_type,
-            'thumbnail': thumbnail,
-            'type': 'file'
-        })
+        if not entry.strip():
+            continue
+        parts = entry.split('|')
+        if len(parts) >= 6:
+            file_id, hash, filename, size, file_type, thumbnail = parts[:6]
+            formatted_entries.append({
+                'chat_id': chat_id,
+                'parent_folder': folder_id,
+                'file_id': file_id,
+                'hash': hash,
+                'name': sanitize_input(filename),
+                'size': size,
+                'file_type': file_type,
+                'thumbnail': thumbnail,
+                'type': 'file'
+            })
 
     await db.add_json(formatted_entries)
     if folder_id == 'root':
@@ -185,8 +261,8 @@ async def send_route(request):
 @routes.get('/reload')
 async def reload_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
 
     chat_id = request.query.get('chatId', '')
     if chat_id == 'home':
@@ -204,15 +280,499 @@ async def reload_route(request):
 @routes.post('/config')
 async def editConfig_route(request):
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
-        return web.json_response({'msg': 'Who the hell you are'})
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'msg': 'Unauthorized'}, status=403)
     data = await request.post()
-    channel = data.get('channel')
-    theme = data.get('theme')
+    channel = sanitize_input(data.get('channel'))
+    theme = sanitize_input(data.get('theme'))
     success = await db.update_config(theme=theme, auth_channel=channel)
     if not success:
         return web.HTTPInternalServerError()
     return web.HTTPFound('/')
+
+
+# =====================================================================
+# STREAM CDN & DIRECT LINK GENERATOR API ENDPOINTS (REAL & PERSISTENT)
+# =====================================================================
+
+@routes.post('/api/upload')
+async def upload_file_route(request: web.Request):
+    """
+    Direct Web-to-CDN Streaming & File Upload API with Telegram Cloud Storage.
+    Handles multipart streaming upload, sends file to Telegram storage channel/group,
+    persists in media_cache and database, and returns instant CDN streaming, download,
+    watch, and embed links.
+    """
+    session = await get_session(request)
+    if 'user' not in session:
+        return web.json_response({'error': 'Unauthorized. Please log in.'}, status=401)
+
+    try:
+        reader = await request.multipart()
+        category = "general"
+        custom_title = ""
+        target_path = None
+        file_name = None
+        total_bytes = 0
+        ext = ".mp4"
+        mime_type = "video/mp4"
+
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            if part.name == 'category':
+                category = (await part.text()).strip().lower()
+            elif part.name == 'title':
+                custom_title = (await part.text()).strip()
+            elif part.name == 'file':
+                raw_filename = part.filename or "stream_video.mp4"
+                file_name = sanitize_input(raw_filename)
+                disallowed_exts = {'.exe', '.bat', '.cmd', '.sh', '.py', '.js', '.vbs', '.php', '.pl', '.cgi'}
+                ext = os.path.splitext(file_name)[1].lower()
+                if ext in disallowed_exts:
+                    return web.json_response({'error': f'Disallowed file type: {ext}'}, status=400)
+                mime_type = mimetypes.guess_type(file_name)[0] or 'video/mp4'
+                temp_cache_id = int(time.time() * 1000) % 2147483647
+                temp_filename = f"temp_upload_{temp_cache_id}_{secrets.token_hex(4)}{ext or '.mp4'}"
+                target_path = media_cache.cache_dir / temp_filename
+
+                total_bytes = 0
+                async with aiofiles.open(target_path, 'wb') as f:
+                    while True:
+                        chunk = await part.read_chunk(1024 * 1024)
+                        if not chunk:
+                            break
+                        total_bytes += len(chunk)
+                        await f.write(chunk)
+
+        if not target_path or not target_path.exists() or total_bytes == 0:
+            return web.json_response({'error': 'No file uploaded under key "file"'}, status=400)
+
+        readable_size = get_readable_file_size(total_bytes)
+        display_title = custom_title or file_name
+
+        # 1. Determine Telegram Cloud Storage channel/group
+        storage_channel = None
+        channel_candidates = []
+        if Telegram.AUTH_CHANNEL:
+            channel_candidates.extend(Telegram.AUTH_CHANNEL)
+        if getattr(Telegram, 'BIN_CHANNEL', None):
+            channel_candidates.append(str(Telegram.BIN_CHANNEL))
+        db_auth_channel = await db.get_variable('auth_channel')
+        if db_auth_channel and db_auth_channel.strip():
+            channel_candidates.extend([c.strip() for c in db_auth_channel.split(',') if c.strip()])
+
+        for cand in channel_candidates:
+            if not cand:
+                continue
+            cleaned_cand = str(cand).strip()
+            cid = int(cleaned_cand) if cleaned_cand.lstrip('-').isdigit() else cleaned_cand
+            if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+                try:
+                    await StreamBot.get_chat(cid)
+                    storage_channel = cid
+                    break
+                except Exception as access_err:
+                    logging.warning(f"Storage candidate {cid} not directly accessible: {access_err}")
+                    if storage_channel is None:
+                        storage_channel = cid
+            else:
+                storage_channel = cid
+                break
+
+        uploaded_to_telegram = False
+        tg_chat_id = None
+        tg_msg_id = None
+        secure_hash = None
+
+        # 2. Upload to Telegram Cloud Storage if client is connected & channel configured
+        if hasattr(StreamBot, "is_connected") and StreamBot.is_connected and storage_channel:
+            try:
+                sync_client_loop(StreamBot)
+                logging.info(f"Uploading file to Telegram cloud storage channel: {storage_channel}")
+                # Sending as document guarantees 100% original quality, fastest upload, and no ffmpeg probe hangs
+                cat_tag = f"#{category}" if category else "#general"
+                tg_msg = await StreamBot.send_document(
+                    chat_id=storage_channel,
+                    document=str(target_path),
+                    file_name=file_name,
+                    caption=f"📁 **{display_title}**\n🏷️ Category: {cat_tag}\n💾 Size: {readable_size}\n⚡ Stream CDN Storage"
+                )
+                media = tg_msg.document or tg_msg.video or tg_msg.audio
+
+                if media:
+                    tg_chat_id = tg_msg.chat.id
+                    tg_msg_id = tg_msg.id
+                    secure_hash = media.file_unique_id[:6]
+                    uploaded_to_telegram = True
+                    logging.info(f"File stored in Telegram channel {tg_chat_id}, message ID: {tg_msg_id}, hash: {secure_hash}")
+            except Exception as tg_err:
+                logging.error(f"Telegram upload to channel {storage_channel} failed: {tg_err}. Falling back to high-speed local cache.")
+
+        if not uploaded_to_telegram:
+            tg_chat_id = -100888888
+            tg_msg_id = int(time.time() * 1000) % 2147483647
+            secure_hash = hashlib.md5(f"{file_name}_{tg_msg_id}".encode()).hexdigest()[:6]
+
+        chat_id_url = str(tg_chat_id).replace("-100", "")
+        cache_key = f"{tg_chat_id}:{tg_msg_id}:{secure_hash}"
+
+        # Align local cache filename with Telegram cache key for instant zero-latency playback
+        safe_cache_filename = f"{hashlib.md5(cache_key.encode()).hexdigest()}{ext or '.mp4'}"
+        final_target_path = media_cache.cache_dir / safe_cache_filename
+        if target_path != final_target_path and target_path.exists():
+            try:
+                if final_target_path.exists():
+                    os.remove(final_target_path)
+                os.rename(target_path, final_target_path)
+                target_path = final_target_path
+            except Exception as e:
+                logging.warning(f"Could not rename cache file: {e}")
+
+        # 3. Persist to Media Cache Collection
+        media_cache.collection.update_one(
+            {"cache_key": cache_key},
+            {"$set": {
+                "cache_key": cache_key,
+                "chat_id": tg_chat_id,
+                "msg_id": tg_msg_id,
+                "secure_hash": secure_hash,
+                "file_name": display_title,
+                "category": category,
+                "file_size": total_bytes,
+                "mime_type": mime_type,
+                "file_path": str(target_path),
+                "cached_path": str(target_path),
+                "access_count": 1,
+                "last_access": datetime.utcnow().isoformat() if hasattr(media_cache.collection, 'db_path') else datetime.utcnow(),
+                "score": 10.0
+            }},
+            upsert=True
+        )
+
+        # 4. Persist to Files table
+        await db.add_tgfiles(
+            chat_id=str(tg_chat_id),
+            file_id=int(tg_msg_id),
+            hash=secure_hash,
+            name=display_title,
+            size=readable_size,
+            file_type=mime_type
+        )
+
+        # 5. Persist to Playlist table (root directory)
+        await db.add_json([{
+            'parent_folder': 'root',
+            'name': display_title,
+            'thumbnail': '',
+            'type': 'file',
+            'chat_id': str(tg_chat_id),
+            'file_id': int(tg_msg_id),
+            'hash': secure_hash,
+            'size': readable_size,
+            'file_type': mime_type
+        }])
+
+        base_url = get_base_url(request)
+        encoded_name = quote(file_name)
+        key_param = f"&key={quote(Telegram.STREAM_AUTH_KEY)}" if Telegram.STREAM_AUTH_KEY else ""
+        stream_url = f"{base_url}/{chat_id_url}/{encoded_name}?id={tg_msg_id}&hash={secure_hash}{key_param}"
+        download_url = f"{base_url}/{chat_id_url}/{encoded_name}?id={tg_msg_id}&hash={secure_hash}{key_param}"
+        watch_url = f"{base_url}/watch/{chat_id_url}?id={tg_msg_id}&hash={secure_hash}{key_param}"
+        embed_code = f'<iframe src="{watch_url}" width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
+
+        return web.json_response({
+            'success': True,
+            'file_name': file_name,
+            'file_size': readable_size,
+            'file_size_bytes': total_bytes,
+            'mime_type': mime_type,
+            'chat_id': chat_id_url,
+            'full_chat_id': str(tg_chat_id),
+            'msg_id': tg_msg_id,
+            'hash': secure_hash,
+            'storage': 'telegram_cloud' if uploaded_to_telegram else 'local_cache',
+            'storage_channel': str(storage_channel) if uploaded_to_telegram else None,
+            'stream_url': stream_url,
+            'download_url': download_url,
+            'watch_url': watch_url,
+            'embed_code': embed_code
+        })
+    except Exception as e:
+        logging.error(f"Upload error: {e}", exc_info=True)
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@routes.get('/api/status')
+async def system_status_route(request: web.Request):
+    """
+    Returns live system status: Telegram bot connection, storage channels,
+    storage mode, and stream statistics.
+    """
+    session = await get_session(request)
+    is_admin = is_admin_user(session.get('user'))
+    bot_connected = bool(hasattr(StreamBot, "is_connected") and StreamBot.is_connected)
+    bot_username = getattr(StreamBot, "username", None)
+    if bot_connected and not bot_username and getattr(StreamBot, "me", None):
+        bot_username = getattr(StreamBot.me, "username", None)
+    
+    db_auth_channel = await db.get_variable('auth_channel')
+    channels_list = [c.strip() for c in db_auth_channel.split(',') if c.strip()] if db_auth_channel else Telegram.AUTH_CHANNEL
+    storage_channel = channels_list[0] if channels_list else getattr(Telegram, 'BIN_CHANNEL', None)
+
+    return web.json_response({
+        'telegram_connected': bot_connected,
+        'bot_username': bot_username,
+        'storage_channel': storage_channel,
+        'storage_channels': channels_list,
+        'storage_mode': 'Telegram Cloud Storage (Active)' if (bot_connected and storage_channel) else 'Local Disk Cache (Standalone)',
+        'cache_enabled': media_cache.enabled,
+        'base_url': get_base_url(request),
+        'is_admin': is_admin
+    })
+
+
+@routes.post('/api/config/telegram')
+async def update_telegram_channel_route(request: web.Request):
+    """
+    Updates the Telegram storage channel/group ID dynamically and saves to database.
+    """
+    session = await get_session(request)
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'error': 'Unauthorized'}, status=403)
+    
+    try:
+        data = await request.json()
+    except Exception:
+        data = await request.post()
+
+    channel = sanitize_input(data.get('auth_channel', '')).strip()
+    if not channel:
+        return web.json_response({'error': 'Storage channel cannot be empty'}, status=400)
+    
+    await db.update_config(auth_channel=channel)
+    Telegram.AUTH_CHANNEL = [c.strip() for c in channel.split(',') if c.strip()]
+    if Telegram.AUTH_CHANNEL:
+        Telegram.BIN_CHANNEL = Telegram.AUTH_CHANNEL[0]
+
+    return web.json_response({
+        'success': True,
+        'message': f'Storage channel updated to: {channel}',
+        'storage_channel': Telegram.BIN_CHANNEL,
+        'storage_channels': Telegram.AUTH_CHANNEL
+    })
+
+
+@routes.post('/api/generate-link')
+async def generate_link_route(request: web.Request):
+    """
+    Converts a Telegram post link or custom file metadata into a CDN Stream Link.
+    Supports https://t.me/c/1234567890/42 or https://t.me/channel_name/42
+    """
+    session = await get_session(request)
+    if 'user' not in session:
+        return web.json_response({'error': 'Unauthorized'}, status=401)
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = await request.post()
+
+    tg_link = (data.get('tg_link') or '').strip()
+    chat_id = data.get('chat_id')
+    msg_id = data.get('msg_id')
+    file_name = sanitize_input(data.get('file_name') or '')
+
+    # Parse Telegram link if provided
+    if tg_link:
+        match_c = re.search(r't\.me/c/(\d+)/(\d+)', tg_link)
+        if match_c:
+            chat_id = f"-100{match_c.group(1)}"
+            msg_id = int(match_c.group(2))
+        else:
+            match_pub = re.search(r't\.me/([^/]+)/(\d+)', tg_link)
+            if match_pub:
+                channel_name = match_pub.group(1)
+                msg_id = int(match_pub.group(2))
+                if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+                    try:
+                        chat = await StreamBot.get_chat(channel_name)
+                        chat_id = str(chat.id)
+                    except Exception:
+                        chat_id = f"-100{channel_name}" if channel_name.isdigit() else channel_name
+                else:
+                    chat_id = f"-100{channel_name}" if channel_name.isdigit() else channel_name
+
+    if not chat_id or not msg_id:
+        return web.json_response({'error': 'Invalid link or missing chat_id / msg_id'}, status=400)
+
+    chat_id_int = int(str(chat_id).replace("-100", ""))
+    full_chat_id = f"-100{chat_id_int}" if not str(chat_id).startswith("-100") else str(chat_id)
+    msg_id_int = int(msg_id)
+
+    file_size_str = "Available"
+    mime_type = "video/mp4"
+    secure_hash = ""
+
+    if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+        try:
+            tg_msg = await StreamBot.get_messages(int(full_chat_id), msg_id_int)
+            media = tg_msg.video or tg_msg.document or tg_msg.audio
+            if media:
+                if not file_name:
+                    file_name = media.file_name or tg_msg.caption or f"Telegram_File_{msg_id_int}"
+                secure_hash = media.file_unique_id[:6]
+                file_size_str = get_readable_file_size(media.file_size)
+                mime_type = media.mime_type or "video/mp4"
+        except Exception as e:
+            logging.warning(f"Could not fetch TG message details: {e}")
+
+    if not secure_hash:
+        secure_hash = hashlib.md5(f"{full_chat_id}_{msg_id_int}".encode()).hexdigest()[:6]
+    if not file_name:
+        file_name = f"Telegram_Stream_{msg_id_int}.mp4"
+
+    # Persist in files database
+    await db.add_tgfiles(
+        chat_id=str(full_chat_id),
+        file_id=msg_id_int,
+        hash=secure_hash,
+        name=file_name,
+        size=file_size_str,
+        file_type=mime_type
+    )
+
+    base_url = get_base_url(request)
+    chat_id_url = str(chat_id_int)
+    encoded_name = quote(file_name)
+    key_param = f"&key={quote(Telegram.STREAM_AUTH_KEY)}" if Telegram.STREAM_AUTH_KEY else ""
+    stream_url = f"{base_url}/{chat_id_url}/{encoded_name}?id={msg_id_int}&hash={secure_hash}{key_param}"
+    download_url = f"{base_url}/{chat_id_url}/{encoded_name}?id={msg_id_int}&hash={secure_hash}{key_param}"
+    watch_url = f"{base_url}/watch/{chat_id_url}?id={msg_id_int}&hash={secure_hash}{key_param}"
+    embed_code = f'<iframe src="{watch_url}" width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
+
+    return web.json_response({
+        'success': True,
+        'file_name': file_name,
+        'file_size': file_size_str,
+        'mime_type': mime_type,
+        'chat_id': chat_id_url,
+        'msg_id': msg_id_int,
+        'hash': secure_hash,
+        'stream_url': stream_url,
+        'download_url': download_url,
+        'watch_url': watch_url,
+        'embed_code': embed_code
+    })
+
+
+@routes.get('/api/streams')
+async def list_streams_route(request: web.Request):
+    """Returns all active stream CDN links."""
+    session = await get_session(request)
+    if 'user' not in session:
+        return web.json_response({'error': 'Unauthorized'}, status=401)
+
+    page = int(request.query.get('page', 1))
+    files = await db.list_all_files(page=page, per_page=100)
+    base_url = get_base_url(request)
+
+    streams = []
+    for f in files:
+        cid = str(f.get('chat_id', '')).replace("-100", "")
+        mid = f.get('msg_id')
+        hsh = f.get('hash')
+        fname = f.get('title') or f"File_{mid}"
+        enc_name = quote(fname)
+        key_param = f"&key={quote(Telegram.STREAM_AUTH_KEY)}" if Telegram.STREAM_AUTH_KEY else ""
+        stream_url = f"{base_url}/{cid}/{enc_name}?id={mid}&hash={hsh}{key_param}"
+        watch_url = f"{base_url}/watch/{cid}?id={mid}&hash={hsh}{key_param}"
+        is_telegram = cid != "888888" and not cid.startswith("888888")
+        storage_type = "Telegram Cloud" if is_telegram else "Local Cache"
+        storage_badge = f"-100{cid}" if is_telegram else "Local Disk"
+
+        cat = f.get('category')
+        if not cat:
+            low_name = fname.lower()
+            if any(k in low_name for k in ['18+', 'xxx', 'adult', 'nsfw', 'sex', 'erotic', 'porn']):
+                cat = '18plus'
+            elif any(k in low_name for k in ['s01', 's02', 's03', 'season', 'episode', 'ep0', 'ep1', 'ep2']):
+                cat = 'series'
+            elif any(k in low_name for k in ['anime', 'manga', 'naruto', 'one piece', 'dragon ball']):
+                cat = 'anime'
+            elif any(k in low_name for k in ['movie', '1080p', '720p', '4k', 'uhd', 'bluray', 'webrip', 'hindi']):
+                cat = 'movies'
+            else:
+                cat = 'general'
+
+        streams.append({
+            'chat_id': cid,
+            'msg_id': mid,
+            'hash': hsh,
+            'title': fname,
+            'category': cat,
+            'size': f.get('size', 'N/A'),
+            'type': f.get('type', 'video/mp4'),
+            'storage_type': storage_type,
+            'storage_badge': storage_badge,
+            'stream_url': stream_url,
+            'download_url': stream_url,
+            'watch_url': watch_url,
+            'embed_code': f'<iframe src="{watch_url}" width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
+        })
+
+    return web.json_response({'streams': streams, 'count': len(streams)})
+
+
+@routes.post('/api/delete-stream')
+async def delete_stream_route(request: web.Request):
+    session = await get_session(request)
+    if not is_admin_user(session.get('user')):
+        return web.json_response({'error': 'Unauthorized'}, status=403)
+
+    try:
+        data = await request.json()
+    except Exception:
+        data = await request.post()
+
+    chat_id = data.get('chat_id')
+    msg_id = data.get('msg_id')
+    secure_hash = data.get('hash')
+
+    if not all([chat_id, msg_id, secure_hash]):
+        return web.json_response({'error': 'Missing chat_id, msg_id, or hash'}, status=400)
+
+    full_chat_id = f"-100{str(chat_id).replace('-100', '')}"
+    cache_key = f"{full_chat_id}:{msg_id}:{secure_hash}"
+
+    # Delete from media_cache
+    if media_cache.collection:
+        doc = media_cache.collection.find_one({"cache_key": cache_key})
+        if doc and doc.get("file_path"):
+            try:
+                p = Path(doc["file_path"])
+                if p.exists():
+                    p.unlink(missing_ok=True)
+            except Exception as e:
+                logging.error(f"Failed to delete cached file from disk: {e}")
+        media_cache.collection.delete_one({"cache_key": cache_key})
+
+    # Delete from files table
+    await db.delete_file(full_chat_id, msg_id, secure_hash)
+
+    # Delete from playlist table if present
+    try:
+        if not db.is_mongo:
+            await db.sqlite.execute_query(
+                "DELETE FROM playlist WHERE chat_id = ? AND file_id = ? AND hash = ?",
+                (str(full_chat_id), int(msg_id), str(secure_hash)),
+                commit=True
+            )
+    except Exception as e:
+        logging.warning(f"Could not delete from playlist: {e}")
+
+    return web.json_response({'success': True, 'msg': 'Stream deleted successfully'})
 
 
 
@@ -225,7 +785,7 @@ async def home_route(request):
             playlists = await db.get_Dbfolder()
             phtml = await posts_chat(channels)
             dhtml = await post_playlist(playlists)
-            is_admin = username == Telegram.ADMIN_USERNAME
+            is_admin = is_admin_user(username)
             return web.Response(text=await render_page(None, None, route='home', html=phtml, playlist=dhtml, is_admin=is_admin), content_type='text/html')
         except Exception as e:
             logging.critical(e.with_traceback(None))
@@ -247,7 +807,7 @@ async def playlist_route(request):
             text = await db.get_info(parent_id)
             dhtml = await post_playlist(playlists)
             dphtml = await posts_db_file(files)
-            is_admin = username == Telegram.ADMIN_USERNAME
+            is_admin = is_admin_user(username)
             return web.Response(text=await render_page(parent_id, None, route='playlist', playlist=dhtml, database=dphtml, msg=text, is_admin=is_admin, page=int(page)), content_type='text/html')
         except Exception as e:
             logging.critical(e.with_traceback(None))
@@ -264,7 +824,7 @@ async def dbsearch_route(request):
         parent = request.match_info['parent']
         page = request.query.get('page', '1')
         query = request.query.get('q')
-        is_admin = username == Telegram.ADMIN_USERNAME
+        is_admin = is_admin_user(username)
         try:
             files = await db.search_dbfiles(id=parent, page=page, query=query)
             dphtml = await posts_db_file(files)
@@ -286,7 +846,7 @@ async def channel_route(request):
         chat_id = request.match_info['chat_id']
         chat_id = f"-100{chat_id}"
         page = request.query.get('page', '1')
-        is_admin = username == Telegram.ADMIN_USERNAME
+        is_admin = is_admin_user(username)
         try:
             posts = await get_files(chat_id, page=page)
             phtml = await posts_file(posts, chat_id)
@@ -308,7 +868,7 @@ async def search_route(request):
         chat_id = f"-100{chat_id}"
         page = request.query.get('page', '1')
         query = request.query.get('q')
-        is_admin = username == Telegram.ADMIN_USERNAME
+        is_admin = is_admin_user(username)
         try:
             posts = await search(chat_id, page=page, query=query)
             phtml = await posts_file(posts, chat_id)
@@ -332,6 +892,8 @@ async def get_thumbnail(request):
         img = await get_image(int(chat_id), int(message_id))
     else:
         img = await get_image(int(chat_id), None)
+    if not img or not os.path.exists(str(img)):
+        return web.HTTPNotFound(text="Thumbnail not found")
     response = web.FileResponse(img)
     response.content_type = "image/jpeg"
     return response
@@ -353,8 +915,8 @@ async def get_subtitle(request):
         secure_hash = request.query.get('hash')
         track_index = int(request.query.get('track', '0'))
         
-        if not message_id or not secure_hash:
-            return web.HTTPBadRequest(text="Missing id or hash parameter")
+        if not message_id or not secure_hash or not validate_hash(secure_hash):
+            return web.HTTPBadRequest(text="Missing or invalid id or hash parameter")
         
         # Check cache first
         cached_path = subtitle_cache.get_cached_subtitle(
@@ -478,8 +1040,8 @@ async def get_subtitle_tracks(request):
         message_id = request.query.get('id')
         secure_hash = request.query.get('hash')
         
-        if not message_id or not secure_hash:
-            return web.HTTPBadRequest(text="Missing id or hash parameter")
+        if not message_id or not secure_hash or not validate_hash(secure_hash):
+            return web.HTTPBadRequest(text="Missing or invalid id or hash parameter")
         
         # Get file properties
         index = min(work_loads, key=work_loads.get)
@@ -523,12 +1085,24 @@ async def get_subtitle_tracks(request):
 @routes.get('/watch/{chat_id}', allow_head=True)
 async def stream_handler_watch(request: web.Request):
     session = await get_session(request)
-    if username := session.get('user'):
+    message_id = request.query.get('id')
+    secure_hash = request.query.get('hash')
+    
+    # Enforce stream access permissions (Key / Domain / Logged-in session)
+    if not is_stream_access_allowed(request, session):
+        if not session.get('user'):
+            session['redirect_url'] = request.path_qs
+            return web.HTTPFound('/login')
+        raise web.HTTPForbidden(text="Access denied: Stream key or domain authorization required.")
+
+    # Allow logged-in users OR direct link viewers with valid id and hash (Stream CDN Player)
+    if session.get('user') or (message_id and secure_hash):
         try:
-            chat_id = request.match_info['chat_id']
-            chat_id = f"-100{chat_id}"
-            message_id = request.query.get('id')
-            secure_hash = request.query.get('hash')
+            raw_chat_id = request.match_info['chat_id']
+            cleaned_cid = raw_chat_id.replace('-100', '').lstrip('-')
+            if not cleaned_cid.isdigit():
+                raise web.HTTPNotFound()
+            chat_id = f"-100{cleaned_cid}"
             return web.Response(text=await render_page(message_id, secure_hash, chat_id=chat_id), content_type='text/html')
         except InvalidHash as e:
             raise web.HTTPForbidden(text=e.message) from e
@@ -547,10 +1121,19 @@ async def stream_handler_watch(request: web.Request):
 
 @routes.get('/{chat_id}/{encoded_name}', allow_head=True)
 async def stream_handler(request: web.Request):
+    session = await get_session(request)
+    if not is_stream_access_allowed(request, session):
+        raise web.HTTPForbidden(text="Access denied: Stream key or domain authorization required.")
+
     try:
-        chat_id = request.match_info['chat_id']
-        chat_id = f"-100{chat_id}"
+        raw_chat_id = request.match_info['chat_id']
+        cleaned_cid = raw_chat_id.replace('-100', '').lstrip('-')
+        if not cleaned_cid.isdigit():
+            raise web.HTTPNotFound()
+        chat_id = f"-100{cleaned_cid}"
         message_id = request.query.get('id')
+        if not message_id or not str(message_id).isdigit():
+            raise web.HTTPNotFound()
         #name = request.match_info['encoded_name']
         secure_hash = request.query.get('hash')
         return await media_streamer(request, int(chat_id), int(message_id), secure_hash)
@@ -609,6 +1192,9 @@ async def stream_from_cache(request: web.Request, cached_path, file_size: int, m
     
     logging.info(f"Streaming from cache: {file_name}")
     
+    is_download = request.query.get('dl', '').lower() in ('1', 'true') or request.query.get('download', '').lower() in ('1', 'true')
+    disposition_type = "attachment" if is_download else "inline"
+
     return web.Response(
         status=206 if range_header else 200,
         body=file_sender(),
@@ -616,12 +1202,15 @@ async def stream_from_cache(request: web.Request, cached_path, file_size: int, m
             "Content-Type": f"{mime_type}",
             "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
             "Content-Length": str(req_length),
-            "Content-Disposition": f'attachment; filename="{file_name}"',
+            "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
             "Accept-Ranges": "bytes",
             "Cache-Control": "public, max-age=31536000",
             "Connection": "keep-alive",
             "X-Content-Type-Options": "nosniff",
             "X-Cache": "HIT",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "Range",
+            "Access-Control-Expose-Headers": "Content-Range, Content-Length",
         },
     )
 
@@ -630,25 +1219,40 @@ async def stream_from_cache(request: web.Request, cached_path, file_size: int, m
 async def admin_dashboard(request):
     """Admin Dashboard Route"""
     session = await get_session(request)
-    if (username := session.get('user')) != Telegram.ADMIN_USERNAME:
+    if not is_admin_user(session.get('user')):
         return web.json_response({'msg': 'Unauthorized'}, status=403)
     
-    import psutil
-    
-    # System Stats
-    cpu_percent = psutil.cpu_percent()
-    ram = psutil.virtual_memory()
-    disk = psutil.disk_usage('/')
+    import os
+    from collections import namedtuple
+
+    # System Stats (with safe fallback if psutil is not available on Android/Termux)
+    try:
+        import psutil
+        cpu_percent = psutil.cpu_percent()
+        ram = psutil.virtual_memory()
+        drive = os.path.splitdrive(os.getcwd())[0] + os.sep if os.name == 'nt' else '/'
+        disk = psutil.disk_usage(drive)
+    except Exception:
+        cpu_percent = 0
+        Mem = namedtuple('Mem', ['percent', 'total', 'used', 'free'])
+        ram = Mem(percent=0, total=0, used=0, free=0)
+        Disk = namedtuple('Disk', ['percent', 'total', 'used', 'free'])
+        disk = Disk(percent=0, total=0, used=0, free=0)
     
     # Cache Stats
     cache_stats = await media_cache.cleanup() # Get stats without force cleanup
     
     # Fetch Cached Files (Top 50 recently accessed)
-    from pymongo import DESCENDING
-    cached_files_cursor = media_cache.collection.find().sort("last_access", DESCENDING).limit(50)
+    try:
+        from pymongo import DESCENDING
+    except ImportError:
+        DESCENDING = -1
+
     cached_files = []
-    for doc in cached_files_cursor:
-        cached_files.append(doc)
+    if media_cache.collection:
+        cached_files_cursor = media_cache.collection.find().sort("last_access", DESCENDING).limit(50)
+        for doc in cached_files_cursor:
+            cached_files.append(doc)
     
     rows_html = ""
     if not cached_files:
@@ -661,7 +1265,13 @@ async def admin_dashboard(request):
                 fname = fname[:47] + "..."
                 
             fsize = get_readable_file_size(file.get('file_size', 0))
-            last_access = file.get('last_access').strftime("%Y-%m-%d %H:%M:%S") if file.get('last_access') else "N/A"
+            raw_last_access = file.get('last_access')
+            if isinstance(raw_last_access, str):
+                last_access = raw_last_access
+            elif hasattr(raw_last_access, 'strftime'):
+                last_access = raw_last_access.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_access = "N/A"
             score = f"{file.get('score', 0):.1f}"
             
             rows_html += f"""
@@ -743,6 +1353,24 @@ async def admin_dashboard(request):
 async def media_streamer(request: web.Request, chat_id: int, id: int, secure_hash: str):
     range_header = request.headers.get("Range", 0)
 
+    # 1. Immediate Cache Check (Zero MTProto network lag)
+    cached_path = media_cache.get_cached_path(chat_id, id, secure_hash)
+    if cached_path and cached_path.exists():
+        cache_key = f"{chat_id}:{id}:{secure_hash}"
+        doc = media_cache.collection.find_one({"cache_key": cache_key}) if media_cache.collection else None
+        file_size = (doc.get("file_size") if doc else None) or cached_path.stat().st_size
+        mime_type = (doc.get("mime_type") if doc else None) or (mimetypes.guess_type(str(cached_path))[0] or "video/mp4")
+        file_name = (doc.get("file_name") if doc else None) or cached_path.name
+        logging.info(f"Instant Cache HIT: {file_name}")
+        return await stream_from_cache(
+            request, cached_path, file_size, mime_type, file_name,
+            chat_id, id, secure_hash
+        )
+
+    # 2. Check Telegram clients availability
+    if not multi_clients:
+        return web.HTTPNotFound(text="File not found in local cache and Telegram client not connected")
+
     index = min(work_loads, key=work_loads.get)
     faster_client = multi_clients[index]
 
@@ -783,7 +1411,7 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
             mime_type = "application/octet-stream"
             file_name = f"{secrets.token_hex(2)}.unknown"
 
-    # Check if file is cached
+    # Check if file was cached during request processing
     cached_path = media_cache.get_cached_path(chat_id, id, secure_hash)
     if cached_path and cached_path.exists():
         logging.info(f"Cache HIT: {file_name}")
@@ -850,6 +1478,9 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
     # Debug: Log range request info
     logging.info(f"Request: from={from_bytes}, until={until_bytes}, size={file_size}, mime={mime_type}")
 
+    is_download = request.query.get('dl', '').lower() in ('1', 'true') or request.query.get('download', '').lower() in ('1', 'true')
+    disposition_type = "attachment" if is_download else "inline"
+
     return web.Response(
         status=206 if range_header else 200,
         body=tg_connect.yield_file(
@@ -859,7 +1490,7 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
             "Content-Type": f"{mime_type}",
             "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
             "Content-Length": str(req_length),
-            "Content-Disposition": f'attachment; filename="{file_name}"',
+            "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
             "Accept-Ranges": "bytes",
             "Cache-Control": "public, max-age=31536000",
             "Connection": "keep-alive",
