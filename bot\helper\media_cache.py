@@ -1,0 +1,952 @@
+"""
+Media Cache Manager for Video/Audio Streaming
+Implements LFU-based eviction policy with access counting
+"""
+
+import asyncio
+import hashlib
+import logging
+import os
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Optional, Dict, Any, Set
+
+try:
+    from pymongo import MongoClient, ASCENDING
+except ImportError:
+    MongoClient = None
+    ASCENDING = 1
+from bot.config import Telegram
+
+# Supported media types for caching
+CACHEABLE_EXTENSIONS = {
+    'video': ['.mp4', '.mkv', '.webm', '.avi', '.mov', '.flv', '.wmv'],
+    'audio': ['.mp3', '.m4a', '.flac', '.wav', '.ogg', '.aac']
+}
+
+CACHEABLE_MIMETYPES = {
+    'video/mp4', 'video/x-matroska', 'video/webm', 'video/avi', 
+    'video/quicktime', 'video/x-flv', 'video/x-ms-wmv',
+    'audio/mpeg', 'audio/mp4', 'audio/flac', 'audio/wav', 
+    'audio/ogg', 'audio/aac'
+}
+
+
+import sqlite3
+
+class SQLiteCacheCollection:
+    def __init__(self, db_path=None):
+        if not db_path:
+            self.db_path = str(Path(__file__).resolve().parent.parent.parent / "surftg.db")
+        else:
+            self.db_path = db_path
+        self._init()
+        
+    def _init(self):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS media_cache (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cache_key TEXT UNIQUE,
+                    file_path TEXT,
+                    file_size INTEGER DEFAULT 0,
+                    mime_type TEXT,
+                    file_name TEXT,
+                    access_count INTEGER DEFAULT 1,
+                    last_access TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    score REAL DEFAULT 0.0
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_key ON media_cache(cache_key)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_cache_score ON media_cache(score)")
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
+
+    def create_index(self, *args, **kwargs):
+        pass
+
+    def find_one(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            if "cache_key" in filter_dict:
+                cur = conn.execute("SELECT * FROM media_cache WHERE cache_key = ?", (filter_dict["cache_key"],))
+                row = cur.fetchone()
+                return dict(row) if row else None
+        return None
+
+    def find(self, filter_dict=None, projection=None):
+        class Cursor:
+            def __init__(self, db_path, filter_dict):
+                self.db_path = db_path
+                self.filter_dict = filter_dict or {}
+                self._sort_field = "rowid"
+                self._sort_dir = "ASC"
+                self._limit = None
+
+            def sort(self, field, direction=1):
+                self._sort_field = field if field in ("score", "last_access", "access_count", "file_size") else "rowid"
+                self._sort_dir = "DESC" if direction == -1 else "ASC"
+                return self
+
+            def limit(self, n):
+                self._limit = n
+                return self
+
+            def __iter__(self):
+                with sqlite3.connect(self.db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    sql = f"SELECT * FROM media_cache ORDER BY {self._sort_field} {self._sort_dir}"
+                    if self._limit:
+                        sql += f" LIMIT {self._limit}"
+                    cur = conn.execute(sql)
+                    for r in cur.fetchall():
+                        d = dict(r)
+                        d['_id'] = d.get('cache_key')
+                        if isinstance(d.get('last_access'), str):
+                            try:
+                                d['last_access'] = datetime.fromisoformat(d['last_access'])
+                            except Exception:
+                                pass
+                        yield d
+
+        return Cursor(self.db_path, filter_dict)
+
+    def count_documents(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            cur = conn.execute("SELECT COUNT(*) FROM media_cache")
+            return cur.fetchone()[0]
+
+    def update_one(self, filter_dict, update_dict, upsert=False):
+        cache_key = filter_dict.get("cache_key") or filter_dict.get("_id")
+        set_vals = update_dict.get("$set", {})
+        inc_vals = update_dict.get("$inc", {})
+        with sqlite3.connect(self.db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.execute("SELECT * FROM media_cache WHERE cache_key = ?", (cache_key,))
+            existing = cur.fetchone()
+            if existing:
+                updates = []
+                params = []
+                for k, v in set_vals.items():
+                    updates.append(f"{k} = ?")
+                    params.append(str(v) if isinstance(v, (datetime, Path)) else v)
+                for k, v in inc_vals.items():
+                    updates.append(f"{k} = {k} + ?")
+                    params.append(v)
+                if updates:
+                    sql = f"UPDATE media_cache SET {', '.join(updates)} WHERE cache_key = ?"
+                    params.append(cache_key)
+                    conn.execute(sql, tuple(params))
+            elif upsert and cache_key:
+                cols = ["cache_key"]
+                vals = [cache_key]
+                for k, v in set_vals.items():
+                    cols.append(k)
+                    vals.append(str(v) if isinstance(v, (datetime, Path)) else v)
+                placeholders = ", ".join(["?"] * len(vals))
+                conn.execute(f"INSERT INTO media_cache ({', '.join(cols)}) VALUES ({placeholders})", tuple(vals))
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
+
+    def find_one_and_update(self, filter_dict, update_dict, return_document=False):
+        doc = self.find_one(filter_dict)
+        if doc:
+            self.update_one(filter_dict, update_dict)
+            if return_document:
+                return self.find_one(filter_dict)
+            return doc
+        return None
+
+    def delete_one(self, filter_dict):
+        with sqlite3.connect(self.db_path) as conn:
+            key = filter_dict.get("cache_key") or filter_dict.get("_id")
+            if key:
+                conn.execute("DELETE FROM media_cache WHERE cache_key = ?", (str(key),))
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN file_path TEXT")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE media_cache ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+            except Exception:
+                pass
+            conn.commit()
+
+
+class MediaCache:
+    """
+    LFU-based media cache manager.
+    
+    Score formula: access_count * K_FACTOR + recency_bonus
+    Files with lowest score are evicted first when cache is full.
+    """
+    
+    K_FACTOR = 10  # Weight for access frequency
+    RECENCY_DECAY_HOURS = 24  # Hours before recency bonus decays
+    
+    def __init__(self):
+        self.enabled = False
+        self.cache_dir = None
+        self.max_size_bytes = 0
+        self.collection = None
+        self.downloading: Set[str] = set()  # Track files being downloaded
+        self._download_lock = asyncio.Lock()  # Lock for atomic check-and-add
+        
+        try:
+            if not Telegram.CACHE_ENABLED:
+                logging.info("Media cache disabled by config")
+                return
+            
+            self.cache_dir = Path(Telegram.CACHE_DIR)
+            self.max_size_bytes = Telegram.CACHE_MAX_SIZE_GB * 1024 * 1024 * 1024
+            
+            # Database connection
+            if Telegram.DATABASE_URL and ("mongodb://" in Telegram.DATABASE_URL or "mongodb+srv://" in Telegram.DATABASE_URL):
+                self.mongo_client = MongoClient(Telegram.DATABASE_URL)
+                self.db = self.mongo_client["surftg"]
+                self.collection = self.db["media_cache"]
+                self.collection.create_index("cache_key", unique=True)
+                self.collection.create_index([("score", ASCENDING)])
+            else:
+                self.collection = SQLiteCacheCollection()
+            
+            # Ensure cache directory exists
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.enabled = True
+            logging.info(f"Media cache initialized: {self.cache_dir} (max: {Telegram.CACHE_MAX_SIZE_GB}GB)")
+            
+        except Exception as e:
+            logging.error(f"Media cache initialization failed: {e}")
+            self.enabled = False
+    
+    def is_downloading(self, chat_id: int, msg_id: int, secure_hash: str) -> bool:
+        """Check if file is currently being downloaded."""
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        return cache_key in self.downloading
+    
+    async def start_background_download(
+        self,
+        chat_id: int,
+        msg_id: int,
+        secure_hash: str,
+        file_id,
+        file_size: int,
+        mime_type: str,
+        file_name: str,
+        tg_connect,
+        client_index: int
+    ) -> None:
+        """Start background download using separate client."""
+        if not self.enabled:
+            return
+        
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        
+        # Use lock to prevent race condition (atomic check-and-add)
+        async with self._download_lock:
+            # Skip if already downloading or cached
+            if cache_key in self.downloading:
+                logging.debug(f"Already downloading: {file_name}")
+                return
+            
+            if self.is_cached(chat_id, msg_id, secure_hash):
+                logging.debug(f"Already cached: {file_name}")
+                return
+            
+            if not self._is_cacheable(mime_type, file_name):
+                return
+            
+            # Mark as downloading INSIDE the lock
+            self.downloading.add(cache_key)
+        
+        logging.info(f"Starting background download: {file_name} ({file_size / 1024 / 1024:.1f}MB)")
+        
+        # Start async download task
+        asyncio.create_task(self._download_file(
+            cache_key, chat_id, msg_id, secure_hash, file_id, 
+            file_size, mime_type, file_name, tg_connect, client_index
+        ))
+    
+    async def _download_file(
+        self,
+        cache_key: str,
+        chat_id: int,
+        msg_id: int,
+        secure_hash: str,
+        file_id,
+        file_size: int,
+        mime_type: str,
+        file_name: str,
+        tg_connect,
+        client_index: int
+    ) -> None:
+        """Actually download the file to cache with client rotation."""
+        from bot.telegram import multi_clients
+        from bot.server.custom_dl import ByteStreamer
+        import asyncio
+
+        # Determine extension
+        if file_name:
+            ext = Path(file_name).suffix.lower()
+        else:
+            ext_map = {
+                'video/mp4': '.mp4', 'video/x-matroska': '.mkv',
+                'video/webm': '.webm', 'audio/mpeg': '.mp3',
+            }
+            ext = ext_map.get(mime_type, '.bin')
+        
+        filename = self._generate_filename(cache_key, ext)
+        file_path = self.cache_dir / filename
+        
+        # Retry loop for client rotation
+        max_retries = len(multi_clients)
+        current_client_index = client_index
+        current_tg_connect = tg_connect
+
+        for attempt in range(max_retries):
+            try:
+                # Ensure directory exists
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Fetch FRESH file properties
+                try:
+                    fresh_file_id = await current_tg_connect.get_file_properties(chat_id=chat_id, message_id=msg_id)
+                except Exception as e:
+                    if "FLOOD_WAIT" in str(e):
+                        raise e # Re-raise to be caught by outer handler for rotation
+                    logging.error(f"Failed to get file properties: {e}")
+                    # If we can't even get properties, maybe try next client?
+                    raise e
+
+                logging.info(f"Background download: got fresh file_id for {file_name} (Client {current_client_index})")
+                
+                # Ensure space
+                await self._ensure_space(file_size)
+                
+                # Download full file
+                chunk_size = 1024 * 1024  # 1MB chunks
+                offset = 0
+                total_written = 0
+                last_logged_percent = 0
+                
+                with open(file_path, 'wb') as f:
+                    async for chunk in current_tg_connect.yield_file(
+                        fresh_file_id, current_client_index, offset, 0, file_size % chunk_size or chunk_size,
+                        (file_size + chunk_size - 1) // chunk_size, chunk_size
+                    ):
+                        if chunk:
+                            f.write(chunk)
+                            total_written += len(chunk)
+                            
+                            # Log progress every 10%
+                            if file_size > 0:
+                                current_percent = int((total_written / file_size) * 100)
+                                if current_percent >= last_logged_percent + 10 or current_percent == 100:
+                                    logging.info(f"Downloading [{file_name}]: {current_percent}% ({total_written / 1024 / 1024:.1f}MB / {file_size / 1024 / 1024:.1f}MB)")
+                                    last_logged_percent = current_percent
+                
+                # Verify file size
+                if file_path.exists():
+                    actual_size = file_path.stat().st_size
+                else:
+                    actual_size = total_written
+                
+                if actual_size >= file_size * 0.99:
+                    # Success! Save metadata and break loop
+                    now = datetime.utcnow()
+                    score = self._calculate_score(1, now)
+                    
+                    self.collection.update_one(
+                        {"cache_key": cache_key},
+                        {
+                            "$set": {
+                                "cache_key": cache_key,
+                                "file_path": str(file_path),
+                                "file_size": actual_size,
+                                "mime_type": mime_type,
+                                "file_name": file_name,
+                                "access_count": 1,
+                                "last_access": now,
+                                "created_at": now,
+                                "score": score
+                            }
+                        },
+                        upsert=True
+                    )
+                    logging.info(f"Background download complete: {file_name} ({actual_size / 1024 / 1024:.1f}MB)")
+                    self.downloading.discard(cache_key)
+                    return # Exit function on success
+
+                else:
+                    logging.warning(f"Incomplete download: {file_name} ({actual_size}/{file_size})")
+                    if file_path.exists():
+                        file_path.unlink()
+                        
+                # If we get here, other exceptions are caught below
+                
+            except Exception as e:
+                err_str = str(e)
+                logging.error(f"Download attempt failed (Client {current_client_index}): {e}")
+                
+                 # Explicit cleanup on failure
+                if file_path.exists():
+                     try:
+                        file_path.unlink()
+                     except OSError:
+                        pass
+
+                if "FLOOD_WAIT" in err_str or "flood" in err_str.lower():
+                    logging.warning(f"FloodWait on Client {current_client_index}. Switching...")
+                    # Rotate Client
+                    current_client_index = (current_client_index + 1) % len(multi_clients)
+                    current_client = multi_clients[current_client_index]
+                    current_tg_connect = ByteStreamer(current_client)
+                    await asyncio.sleep(2)
+                    continue 
+
+                elif isinstance(e, asyncio.CancelledError):
+                    logging.info(f"Background download cancelled: {file_name}")
+                    break 
+                else:
+                    # Retry for network errors
+                    logging.info(f"Retrying with next client due to error...")
+                    current_client_index = (current_client_index + 1) % len(multi_clients)
+                    current_client = multi_clients[current_client_index]
+                    current_tg_connect = ByteStreamer(current_client)
+                    await asyncio.sleep(1)
+                    continue
+
+        # If loop finishes without return, we failed
+        logging.error(f"All download attempts failed for {file_name}")
+        self.downloading.discard(cache_key)
+
+    def _generate_cache_key(self, chat_id: int, msg_id: int, secure_hash: str) -> str:
+        """Generate unique cache key for a media file."""
+        return f"{chat_id}:{msg_id}:{secure_hash}"
+    
+    def _generate_filename(self, cache_key: str, extension: str) -> str:
+        """Generate safe filename from cache key."""
+        hash_name = hashlib.md5(cache_key.encode()).hexdigest()
+        return f"{hash_name}{extension}"
+    
+    def _is_cacheable(self, mime_type: str, file_name: str = None) -> bool:
+        """Check if file type is cacheable."""
+        if mime_type and mime_type in CACHEABLE_MIMETYPES:
+            return True
+        if file_name:
+            ext = Path(file_name).suffix.lower()
+            for exts in CACHEABLE_EXTENSIONS.values():
+                if ext in exts:
+                    return True
+        return False
+    
+    def _calculate_score(self, access_count: int, last_access: Any) -> float:
+        """Calculate eviction score (lower = evict first)."""
+        score = (access_count or 1) * self.K_FACTOR
+        
+        # Add recency bonus (decays over time)
+        if isinstance(last_access, str):
+            try:
+                last_access = datetime.fromisoformat(last_access.replace(" ", "T"))
+            except Exception:
+                last_access = datetime.utcnow()
+        elif not isinstance(last_access, datetime):
+            last_access = datetime.utcnow()
+        
+        hours_since_access = (datetime.utcnow() - last_access).total_seconds() / 3600
+        recency_bonus = max(0, 100 - (hours_since_access / self.RECENCY_DECAY_HOURS * 10))
+        
+        return score + recency_bonus
+    
+    def get_cached_path(self, chat_id: int, msg_id: int, secure_hash: str) -> Optional[Path]:
+        """Get cached file path if exists."""
+        if not self.enabled:
+            return None
+            
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        doc = self.collection.find_one({"cache_key": cache_key})
+        
+        logging.debug(f"Cache lookup: key={cache_key}, found_in_db={doc is not None}")
+        
+        if doc:
+            file_path = doc.get("file_path")
+            file_exists = os.path.exists(file_path) if file_path else False
+            logging.info(f"Cache check: {file_path}, exists={file_exists}")
+            
+            if file_exists:
+                return Path(file_path)
+            else:
+                # File missing from disk, clean up DB entry
+                logging.warning(f"Cache file missing, cleaning DB: {cache_key}")
+                self.collection.delete_one({"cache_key": cache_key})
+        
+        return None
+    
+    def is_cached(self, chat_id: int, msg_id: int, secure_hash: str) -> bool:
+        """Check if media is cached."""
+        return self.get_cached_path(chat_id, msg_id, secure_hash) is not None
+    
+    async def record_access(self, chat_id: int, msg_id: int, secure_hash: str) -> None:
+        """Record file access to update score."""
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        
+        now = datetime.utcnow()
+        result = self.collection.find_one_and_update(
+            {"cache_key": cache_key},
+            {
+                "$inc": {"access_count": 1},
+                "$set": {"last_access": now}
+            },
+            return_document=True
+        )
+        
+        # Trigger Smart Pre-Caching if this is a "new" access (or simply every time, logic handles dupes)
+        # To avoid spamming, maybe check if we just updated.
+        # But we need filename. 'result' contains OLD document (default return of find_one_and_update)
+        # If result is None, it means it wasn't in cache DB yet (maybe first stream?)
+        # Actually start_background_download inserts it later.
+        # This record_access is called by stream_from_cache.
+        
+        if result:
+            filename = result.get('file_name')
+            if filename:
+                 asyncio.create_task(self.smart_pre_cache(chat_id, filename))
+        
+        if result:
+            # Update score
+            new_score = self._calculate_score(result["access_count"], now)
+            self.collection.update_one(
+                {"cache_key": cache_key},
+                {"$set": {"score": new_score}}
+            )
+    
+    async def add_to_cache(
+        self, 
+        chat_id: int, 
+        msg_id: int, 
+        secure_hash: str,
+        file_data: bytes,
+        mime_type: str,
+        file_name: str = None
+    ) -> Optional[Path]:
+        """
+        Save file to cache.
+        Returns the cached file path or None if caching failed/disabled.
+        """
+        if not self.enabled:
+            return None
+        
+        if not self._is_cacheable(mime_type, file_name):
+            logging.debug(f"File not cacheable: {mime_type}")
+            return None
+        
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        
+        # Determine extension
+        if file_name:
+            ext = Path(file_name).suffix.lower()
+        elif mime_type:
+            ext_map = {
+                'video/mp4': '.mp4', 'video/x-matroska': '.mkv',
+                'video/webm': '.webm', 'audio/mpeg': '.mp3',
+                'audio/mp4': '.m4a', 'audio/flac': '.flac'
+            }
+            ext = ext_map.get(mime_type, '.bin')
+        else:
+            ext = '.bin'
+        
+        filename = self._generate_filename(cache_key, ext)
+        file_path = self.cache_dir / filename
+        
+        # Check if we need to make room
+        file_size = len(file_data)
+        await self._ensure_space(file_size)
+        
+        try:
+            # Write file
+            with open(file_path, 'wb') as f:
+                f.write(file_data)
+            
+            now = datetime.utcnow()
+            score = self._calculate_score(1, now)
+            
+            # Save metadata
+            self.collection.update_one(
+                {"cache_key": cache_key},
+                {
+                    "$set": {
+                        "cache_key": cache_key,
+                        "file_path": str(file_path),
+                        "file_size": file_size,
+                        "mime_type": mime_type,
+                        "file_name": file_name,
+                        "access_count": 1,
+                        "last_access": now,
+                        "created_at": now,
+                        "score": score
+                    }
+                },
+                upsert=True
+            )
+            
+            logging.info(f"Cached: {file_name or cache_key} ({file_size / 1024 / 1024:.1f}MB)")
+            return file_path
+            
+        except Exception as e:
+            logging.error(f"Cache write error: {e}")
+            if file_path.exists():
+                file_path.unlink()
+            return None
+    
+    async def add_to_cache_streaming(
+        self,
+        chat_id: int,
+        msg_id: int, 
+        secure_hash: str,
+        mime_type: str,
+        file_name: str = None
+    ) -> Optional[Path]:
+        """
+        Prepare cache file for streaming write.
+        Returns file path to write to, or None if not cacheable.
+        """
+        if not self.enabled:
+            return None
+        
+        if not self._is_cacheable(mime_type, file_name):
+            return None
+        
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        
+        # Determine extension
+        if file_name:
+            ext = Path(file_name).suffix.lower()
+        else:
+            ext_map = {
+                'video/mp4': '.mp4', 'video/x-matroska': '.mkv',
+                'video/webm': '.webm', 'audio/mpeg': '.mp3',
+            }
+            ext = ext_map.get(mime_type, '.bin')
+        
+        filename = self._generate_filename(cache_key, ext)
+        file_path = self.cache_dir / filename
+        
+        return file_path
+    
+    async def finalize_cache(
+        self,
+        chat_id: int,
+        msg_id: int,
+        secure_hash: str,
+        file_path: Path,
+        file_size: int,
+        mime_type: str,
+        file_name: str = None
+    ) -> None:
+        """Finalize cache entry after streaming write completes."""
+        if not file_path.exists():
+            return
+        
+        cache_key = self._generate_cache_key(chat_id, msg_id, secure_hash)
+        now = datetime.utcnow()
+        score = self._calculate_score(1, now)
+        
+        self.collection.update_one(
+            {"cache_key": cache_key},
+            {
+                "$set": {
+                    "cache_key": cache_key,
+                    "file_path": str(file_path),
+                    "file_size": file_size,
+                    "mime_type": mime_type,
+                    "file_name": file_name,
+                    "access_count": 1,
+                    "last_access": now,
+                    "created_at": now,
+                    "score": score
+                }
+            },
+            upsert=True
+        )
+        
+        logging.info(f"Cache finalized: {file_name or cache_key} ({file_size / 1024 / 1024:.1f}MB)")
+    
+    def get_cache_size(self) -> int:
+        """Get current cache size in bytes."""
+        total = 0
+        for doc in self.collection.find({}, {"file_size": 1}):
+            total += doc.get("file_size", 0)
+        return total
+    
+    async def _ensure_space(self, needed_bytes: int) -> None:
+        """Ensure there's enough space, evicting files if necessary."""
+        current_size = self.get_cache_size()
+        target_size = self.max_size_bytes - needed_bytes
+        
+        if current_size <= target_size:
+            return
+        
+        logging.info(f"Cache eviction triggered: Container full (limit {self.max_size_bytes/1024/1024/1024:.2f}GB). Need {needed_bytes/1024/1024:.1f}MB, current {current_size/1024/1024/1024:.2f}GB")
+        
+        # Get files sorted by score (lowest first = evict first)
+        cursor = self.collection.find().sort("score", ASCENDING)
+        
+        for doc in cursor:
+            if current_size <= target_size:
+                break
+            
+            file_path = Path(doc["file_path"])
+            file_size = doc["file_size"]
+            
+            try:
+                if file_path.exists():
+                    file_path.unlink()
+                self.collection.delete_one({"_id": doc["_id"]})
+                current_size -= file_size
+                logging.info(f"Evicted: {doc.get('file_name', doc['cache_key'])} (score: {doc['score']:.1f})")
+            except Exception as e:
+                logging.error(f"Eviction error: {e}")
+    
+    async def cleanup(self) -> Dict[str, Any]:
+        """Periodic cleanup task."""
+        if not self.enabled:
+            return {"status": "disabled", "cache_size_gb": 0.0, "files_cached": 0}
+        
+        # Remove orphaned DB entries (file doesn't exist on disk)
+        removed = 0
+        for doc in self.collection.find():
+            fpath = doc.get("file_path")
+            if not fpath or not os.path.exists(fpath):
+                self.collection.delete_one({"_id": doc.get("_id")})
+                removed += 1
+        
+        # Recalculate all scores
+        now = datetime.utcnow()
+        for doc in self.collection.find():
+            new_score = self._calculate_score(doc.get("access_count", 1), doc.get("last_access"))
+            self.collection.update_one(
+                {"_id": doc.get("_id")},
+                {"$set": {"score": new_score}}
+            )
+        
+        current_size = self.get_cache_size()
+        
+        return {
+            "status": "ok",
+            "cache_size_gb": current_size / 1024 / 1024 / 1024,
+            "max_size_gb": Telegram.CACHE_MAX_SIZE_GB,
+            "orphans_removed": removed,
+            "files_cached": self.collection.count_documents({})
+        }
+
+
+    async def smart_pre_cache(self, chat_id: int, current_filename: str):
+        """
+        Predict and pre-cache the next episode based on current filename.
+        Patterns:
+        - "Title - 04 [1080p]..." -> "Title - 05 [1080p]..."
+        - "Title--04 720p" -> "Title--05 720p"
+        """
+        import re
+        from bot.helper.database import Database
+        
+        logging.info(f"Smart Pre-Caching: Analyzing {current_filename}")
+        
+        # Regex to find episode number (supports 01, 1, etc.)
+        # Groups: 1=Prefix, 2=EpisodeNum, 3=Suffix
+        patterns = [
+            # Pattern: "Title - 04 [1080p]" or "Title_-_04_[1080p]"
+            r'(.*[\s_]-[\s_])(\d{1,3})([\s_]\[.*)',     
+            # Pattern: "Title--12 End 720p" or "Title--11 720p" (with spaces or underscores)
+            # Matches prefix ending in --, then digits, then optional " End", then resolution
+            r'(.*--)(\d{1,3})((?:[\s_]End)?[\s_]\d{3,4}p)', 
+            # Pattern: "Title--04" (simple)
+            r'(.*--)(\d{1,3})(.*)',         
+            # Generic fallback: "Title 04 Suffix" or "Title_04_Suffix"
+            r'(.*[\s_])(\d{1,3})([\s_].*)'          
+        ]
+        
+        next_filename_pattern = None
+        
+        for pattern in patterns:
+            match = re.match(pattern, current_filename)
+            if match:
+                prefix = match.group(1)
+                ep_num_str = match.group(2)
+                suffix = match.group(3)
+                
+                try:
+                    curr_ep = int(ep_num_str)
+                    next_ep = curr_ep + 1
+                    
+                    # Pad with zero if original was padded (e.g. 04 -> 05)
+                    next_ep_str = str(next_ep).zfill(len(ep_num_str))
+                    
+                    # Create regex for next file search
+                    # We use regex search in DB because exact suffix might differ slightly
+                    next_filename_pattern = f"^{re.escape(prefix)}{next_ep_str}.*"
+                    logging.info(f"Smart Pre-Caching: Prediction matched. Looking for pattern: {next_filename_pattern}")
+                    break
+                except ValueError:
+                    continue
+        
+        if not next_filename_pattern:
+            logging.debug("Smart Pre-Caching: Could not predict next episode pattern.")
+            return
+
+        try:
+            # Search for Next Episode in Database
+            # Search for Next Episode in Database
+            db = Database()
+            
+            # 1. Try DB Search
+            regex_query = {"chat_id": str(chat_id), "title": {"$regex": next_filename_pattern, "$options": "i"}}
+            next_file = await db.files.find_one(regex_query)
+            
+            if not next_file:
+                 logging.info("Smart Pre-Caching: Next episode not found in DB. Searching in Telegram Channel...")
+                 next_file = await self._search_in_telegram(chat_id, next_filename_pattern, prefix, next_ep_str)
+
+            if next_file:
+                logging.info(f"Smart Pre-Caching: Found next episode: {next_file.get('title')}")
+                # Check if already cached
+                next_msg_id = next_file['msg_id']
+                next_hash = next_file['hash']
+                
+                if self.is_cached(chat_id, next_msg_id, next_hash):
+                        logging.info("Smart Pre-Caching: Next episode is already cached. Skipping.")
+                        return
+
+                # Trigger download
+                asyncio.create_task(self._trigger_pre_download(chat_id, next_msg_id, next_hash, next_file['title']))
+                
+            else:
+                logging.info("Smart Pre-Caching: Next episode not found in Telegram Channel.")
+                
+        except Exception as e:
+            logging.error(f"Smart Pre-Caching Error: {e}")
+
+    async def _search_in_telegram(self, chat_id, pattern, prefix, next_ep_str):
+        """Search for file in Telegram using UserBot or StreamBot."""
+        from bot.telegram import UserBot, StreamBot
+        from bot.config import Telegram as Config
+        import re
+        from bot.helper.database import Database
+        
+        # Determine query string (Prefix + Next Episode Number)
+        # e.g. "Title - 05"
+        query = f"{prefix}{next_ep_str}"
+        query = query.strip()
+        
+        client = UserBot if len(Config.SESSION_STRING) > 0 else StreamBot
+        
+        try:
+            # Search messages in chat
+            async for message in client.search_messages(chat_id, query=query, limit=20):
+                if not message: continue
+                
+                file = message.video or message.document or message.audio
+                if not file: continue
+                
+                filename = file.file_name or message.caption or ""
+                if not filename: continue
+                
+                # Check regex match
+                if re.match(pattern, filename, re.IGNORECASE):
+                     logging.info(f"Smart Pre-Caching: Found file in Telegram: {filename}")
+                     
+                     # Extract file info
+                     file_size = file.file_size
+                     file_unique_id = file.file_unique_id
+                     mime_type = file.mime_type
+                     
+                     # Index to DB for future speed
+                     db = Database()
+                     await db.add_tgfiles(
+                         str(chat_id), 
+                         message.id, 
+                         file_unique_id[:6], 
+                         filename, 
+                         str(file_size), # DB expects string size often? or int. Let's check db.add_tgfiles
+                         mime_type
+                     )
+                     
+                     return {
+                         "msg_id": message.id,
+                         "hash": file_unique_id[:6],
+                         "title": filename,
+                         "size": file_size,
+                         "chat_id": str(chat_id)
+                     }
+        except Exception as e:
+            logging.error(f"Telegram Search Error: {e}")
+            return None
+        
+        return None
+
+    async def _trigger_pre_download(self, chat_id, msg_id, secure_hash, filename):
+        """Helper to fetch props and start download for pre-caching."""
+        from bot.telegram import multi_clients, work_loads
+        from bot.server.custom_dl import ByteStreamer
+        from bot.server.stream_routes import class_cache
+        
+        try:
+            # Select client
+            index = min(work_loads, key=work_loads.get)
+            client = multi_clients[index]
+            
+            if client in class_cache:
+                tg_connect = class_cache[client]
+            else:
+                tg_connect = ByteStreamer(client)
+                class_cache[client] = tg_connect
+                
+            # Get File Props
+            file_id = await tg_connect.get_file_properties(chat_id, msg_id)
+            
+            if file_id.unique_id[:6] != secure_hash:
+                 return
+
+            file_size = file_id.file_size
+            mime_type = file_id.mime_type or "video/mp4" # Fallback
+            
+            # Start Download
+            # Use a separate background client index to avoid interfering with current stream choice logic if possible
+            bg_index = (index + 1) % len(multi_clients)
+            
+            # Re-use start_background_download logic
+            # We need to pass the bg_connect matching bg_index
+            bg_client = multi_clients[bg_index]
+            if bg_client in class_cache:
+                bg_connect = class_cache[bg_client]
+            else:
+                bg_connect = ByteStreamer(bg_client)
+                class_cache[bg_client] = bg_connect
+
+            await self.start_background_download(
+                chat_id, msg_id, secure_hash, file_id, file_size, mime_type, filename, bg_connect, bg_index
+            )
+            logging.info(f"Smart Pre-Caching: STARTED download for {filename}")
+            
+        except Exception as e:
+            logging.error(f"Pre-cache trigger failed: {e}")
+
+# Global cache instance
+media_cache = MediaCache()

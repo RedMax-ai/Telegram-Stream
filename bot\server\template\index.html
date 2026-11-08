@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>Surf-TG - Channel Files & Streams</title>
+    <!-- Google Fonts: Inter -->
+    <link href="https://fonts.googleapis.com" rel="preconnect" />
+    <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet" />
+    <!-- Material Symbols -->
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "primary": "#6366f1",
+                        "primary-hover": "#4f46e5",
+                        "background-dark": "#0b0d14",
+                        "surface-dark": "#131622",
+                        "surface-card": "rgba(20, 24, 38, 0.75)",
+                        "glass-border": "rgba(255, 255, 255, 0.08)",
+                        "glass-border-hover": "rgba(99, 102, 241, 0.4)",
+                    },
+                    fontFamily: {
+                        "display": ["Inter", "sans-serif"]
+                    }
+                },
+            },
+        }
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        ::-webkit-scrollbar { width: 8px; height: 8px; }
+        ::-webkit-scrollbar-track { background: #0b0d14; }
+        ::-webkit-scrollbar-thumb { background: #232738; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #6366f1; }
+        .glass-panel {
+            background: rgba(19, 22, 34, 0.78);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        .glass-card {
+            background: linear-gradient(135deg, rgba(255, 255, 255, 0.04) 0%, rgba(255, 255, 255, 0.01) 100%);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .glass-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 12px 32px -8px rgba(99, 102, 241, 0.25);
+            border-color: rgba(99, 102, 241, 0.35);
+        }
+    </style>
+</head>
+
+<body class="bg-background-dark text-slate-100 font-display min-h-screen flex flex-col selection:bg-primary selection:text-white">
+    <!-- Ambient Background Spotlights -->
+    <div class="fixed top-0 left-0 w-full h-full overflow-hidden -z-10 pointer-events-none">
+        <div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-primary/20 rounded-full blur-[140px] opacity-40"></div>
+        <div class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-purple-600/20 rounded-full blur-[140px] opacity-30"></div>
+    </div>
+
+    <!-- Navigation Header -->
+    <header class="glass-panel sticky top-0 z-40 w-full border-b border-glass-border">
+        <div class="px-4 sm:px-6 lg:px-8 max-w-[1600px] mx-auto h-16 md:h-20 flex items-center justify-between gap-4">
+            <!-- Brand / Logo Area -->
+            <a href="/" class="flex items-center gap-3 shrink-0 group">
+                <div class="size-10 md:size-11 bg-gradient-to-br from-primary via-purple-600 to-pink-500 rounded-xl flex items-center justify-center shadow-lg shadow-primary/25 group-hover:scale-105 transition-transform">
+                    <span class="material-symbols-outlined text-white text-2xl">bolt</span>
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xl md:text-2xl font-black tracking-tight text-white">Surf-TG</span>
+                        <span class="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/20 text-indigo-300 border border-primary/30 tracking-wider">CHANNELS</span>
+                    </div>
+                    <p class="text-[11px] text-slate-400 font-medium hidden sm:block">Telegram Cloud Stream & Media Index</p>
+                </div>
+            </a>
+
+            <!-- Right Actions -->
+            <div class="flex items-center gap-2.5 shrink-0">
+                <a href="/" class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs md:text-sm font-medium border border-white/10 transition-all">
+                    <span class="material-symbols-outlined text-[18px]">home</span>
+                    <span class="hidden sm:inline">Home</span>
+                </a>
+
+                <a href="/admin/dashboard" class="admin-only flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 hover:text-white text-xs md:text-sm font-medium border border-white/10 hover:border-primary/40 transition-all">
+                    <span class="material-symbols-outlined text-[18px] text-primary">dashboard</span>
+                    <span class="hidden sm:inline">Dashboard</span>
+                </a>
+
+                <a href="/logout" class="p-2.5 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 border border-transparent hover:border-red-500/20 transition-all" title="Logout">
+                    <span class="material-symbols-outlined text-[20px]">logout</span>
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 w-full max-w-[1600px] mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-8 pb-32">
+        <!-- Page Header & Controls -->
+        <div class="flex flex-col lg:flex-row gap-6 lg:items-end justify-between border-b border-glass-border pb-6">
+            <div class="flex flex-col gap-2">
+                <div class="flex items-center gap-2 text-primary font-medium text-sm">
+                    <span class="material-symbols-outlined text-[18px]">folder_copy</span>
+                    <span><a href="/" class="hover:underline text-slate-300 hover:text-white">Channels</a> / <span class="text-white font-bold">Files</span></span>
+                </div>
+                <h1 class="text-3xl md:text-4xl font-black tracking-tight text-white flex items-center gap-3">
+                    <span class="material-symbols-outlined text-primary text-3xl md:text-4xl">cloud_sync</span>
+                    <span>Connected Channel Media</span>
+                </h1>
+                <p class="text-slate-400 text-xs md:text-sm">Browse, stream, and manage media files stored in your Telegram Cloud channel</p>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-3 w-full lg:w-auto">
+                <!-- Search Bar -->
+                <form action="/search/<!-- Chat_id -->" method="get" class="relative group flex-1 sm:w-80">
+                    <div class="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none">
+                        <span class="material-symbols-outlined text-slate-500 group-focus-within:text-primary transition-colors text-lg">search</span>
+                    </div>
+                    <input
+                        class="block w-full rounded-xl border border-white/10 bg-white/5 py-2.5 pl-10 pr-4 text-white text-xs md:text-sm shadow-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all hover:bg-white/10"
+                        placeholder="Search channel videos..." type="text" name="q" />
+                </form>
+
+                <!-- Select All / Deselect All Toggle -->
+                <button type="button" onclick="toggleSelectAll()" id="selectAllBtn"
+                    class="admin-only flex items-center gap-1.5 rounded-xl bg-white/5 hover:bg-white/10 px-3.5 py-2.5 text-xs font-semibold text-slate-300 hover:text-white border border-white/10 transition-all active:scale-95">
+                    <span class="material-symbols-outlined text-base">select_all</span>
+                    <span id="selectAllBtnText">Select All</span>
+                </button>
+
+                <!-- Reload Channel Button -->
+                <a href="/reload?chatId=<!-- Chat_id -->"
+                    class="flex items-center gap-1.5 rounded-xl bg-white/5 hover:bg-white/10 px-3.5 py-2.5 text-xs font-semibold text-slate-300 hover:text-white border border-white/10 transition-all active:scale-95"
+                    title="Refresh channel cache">
+                    <span class="material-symbols-outlined text-base">refresh</span>
+                    <span>Refresh</span>
+                </a>
+            </div>
+        </div>
+
+        <!-- Video Grid -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+            <!-- Print -->
+        </div>
+
+        <!-- Pagination -->
+        <div class="flex items-center justify-center pt-8 pb-12">
+            <div class="flex items-center gap-2 rounded-full glass-panel px-4 py-2 border border-white/10">
+                <!-- Prev -->
+                <!-- Next -->
+            </div>
+        </div>
+    </main>
+
+    <!-- FLOATING BATCH ACTION BAR (Appears when checkboxes are selected) -->
+    <div id="batchActionBar" class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 hidden transition-all duration-300">
+        <div class="glass-panel rounded-2xl px-5 py-3.5 border border-primary/40 shadow-2xl shadow-primary/25 flex items-center gap-4 bg-surface-dark/95 backdrop-blur-xl">
+            <div class="flex items-center gap-2">
+                <span class="size-2 rounded-full bg-primary animate-ping"></span>
+                <span id="selectedCountText" class="text-xs md:text-sm font-bold text-white">0 selected</span>
+            </div>
+
+            <div class="h-5 w-px bg-white/15"></div>
+
+            <div class="flex items-center gap-2">
+                <button type="button" onclick="copySelectedStreamLinks()"
+                    class="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-primary/20 hover:bg-primary text-indigo-200 hover:text-white text-xs font-bold transition-all border border-primary/30"
+                    title="Copy stream CDN links for all selected files">
+                    <span class="material-symbols-outlined text-base">link</span>
+                    <span>Copy CDN Links</span>
+                </button>
+
+                <button type="button" onclick="openSendToFolderModal()"
+                    class="admin-only flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-gradient-to-r from-primary to-purple-600 hover:from-primary-hover hover:to-purple-700 text-white text-xs font-bold transition-all shadow-md shadow-primary/30">
+                    <span class="material-symbols-outlined text-base">drive_file_move</span>
+                    <span>Add to Folder</span>
+                </button>
+
+                <button type="button" onclick="deselectAll()"
+                    class="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
+                    title="Clear selection">
+                    <span class="material-symbols-outlined text-base">close</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SEND TO PLAYLIST / FOLDER MODAL -->
+    <div id="sendToFolderModal" class="fixed inset-0 z-50 hidden bg-black/80 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="glass-panel w-full max-w-md rounded-2xl p-6 border border-white/10 shadow-2xl relative">
+            <div class="flex items-center justify-between pb-4 border-b border-white/10 mb-4">
+                <h3 class="text-lg font-bold text-white flex items-center gap-2">
+                    <span class="material-symbols-outlined text-primary">drive_file_move</span>
+                    <span>Save to Media Playlist Folder</span>
+                </h3>
+                <button type="button" onclick="closeSendToFolderModal()" class="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition-colors">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+
+            <form action="/send" method="POST" id="sendForm" class="space-y-4">
+                <input type="hidden" name="chatId" id="sendFormChatId" value="<!-- Chat_id -->" />
+                <input type="hidden" name="selectedIds" id="sendFormSelectedIds" value="" />
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-1.5">Select Destination Folder</label>
+                    <select name="folderId" id="targetFolderSelect" required
+                        class="w-full px-4 py-2.5 rounded-xl bg-surface-dark border border-white/10 text-white focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all">
+                        <option value="root">Root Playlist (Home Page)</option>
+                    </select>
+                </div>
+
+                <div class="p-3 rounded-xl bg-white/5 border border-white/10 text-xs text-slate-400 space-y-1">
+                    <p class="font-semibold text-slate-200" id="sendModalItemsSummary">0 items selected</p>
+                    <p>Selected media files will be linked to this folder with instant Stream CDN capabilities.</p>
+                </div>
+
+                <div class="flex items-center justify-end gap-3 pt-4 border-t border-white/10">
+                    <button type="button" onclick="closeSendToFolderModal()" class="px-4 py-2 rounded-xl text-slate-400 hover:text-white text-xs md:text-sm font-medium">Cancel</button>
+                    <button type="submit" class="px-5 py-2 rounded-xl bg-primary hover:bg-primary-hover text-white text-xs md:text-sm font-semibold shadow-lg shadow-primary/30 transition-all">
+                        Save Selected Files
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- JAVASCRIPT LOGIC -->
+    <script>
+        const chatId = "<!-- Chat_id -->";
+
+        // Required callback called by checkbox onchange="checkSendButton()"
+        function checkSendButton() {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"][data-id]');
+            const checkedBoxes = Array.from(checkboxes).filter(cb => cb.checked);
+            const count = checkedBoxes.length;
+
+            const batchBar = document.getElementById('batchActionBar');
+            const countText = document.getElementById('selectedCountText');
+            const selectAllBtnText = document.getElementById('selectAllBtnText');
+
+            if (count > 0) {
+                if (batchBar) batchBar.classList.remove('hidden');
+                if (countText) countText.innerText = `${count} selected`;
+                if (selectAllBtnText) selectAllBtnText.innerText = count === checkboxes.length ? 'Deselect All' : 'Select All';
+            } else {
+                if (batchBar) batchBar.classList.add('hidden');
+                if (selectAllBtnText) selectAllBtnText.innerText = 'Select All';
+            }
+        }
+
+        // Toggle Select All / Deselect All
+        function toggleSelectAll() {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"][data-id]');
+            const checkedBoxes = Array.from(checkboxes).filter(cb => cb.checked);
+            const shouldCheck = checkedBoxes.length < checkboxes.length;
+
+            checkboxes.forEach(cb => {
+                cb.checked = shouldCheck;
+            });
+            checkSendButton();
+        }
+
+        function deselectAll() {
+            const checkboxes = document.querySelectorAll('input[type="checkbox"][data-id]');
+            checkboxes.forEach(cb => { cb.checked = false; });
+            checkSendButton();
+        }
+
+        // Copy Stream CDN links for all selected items
+        function copySelectedStreamLinks() {
+            const checkedBoxes = Array.from(document.querySelectorAll('input[type="checkbox"][data-id]:checked'));
+            if (checkedBoxes.length === 0) return;
+
+            const links = checkedBoxes.map(cb => {
+                const parts = cb.getAttribute('data-id').split('|');
+                const fileId = parts[0];
+                const hash = parts[1];
+                const filename = parts[2] || `video_${fileId}.mp4`;
+                const encName = encodeURIComponent(filename);
+                return `${window.location.origin}/${chatId}/${encName}?id=${fileId}&hash=${hash}`;
+            });
+
+            navigator.clipboard.writeText(links.join('\n')).then(() => {
+                alert(`✅ Copied ${links.length} Stream CDN link(s) to clipboard!`);
+            }).catch(err => {
+                prompt("Copy Stream CDN links manually:", links.join('\n'));
+            });
+        }
+
+        // Open Send to Folder Modal and fetch available folders
+        async function openSendToFolderModal() {
+            const checkedBoxes = Array.from(document.querySelectorAll('input[type="checkbox"][data-id]:checked'));
+            if (checkedBoxes.length === 0) return;
+
+            const selectedIds = checkedBoxes.map(cb => cb.getAttribute('data-id')).join(',');
+            document.getElementById('sendFormSelectedIds').value = selectedIds;
+            document.getElementById('sendModalItemsSummary').innerText = `${checkedBoxes.length} media file(s) will be added`;
+
+            // Load folders list
+            try {
+                const res = await fetch('/send-search?query=');
+                if (res.ok) {
+                    const folders = await res.json();
+                    const select = document.getElementById('targetFolderSelect');
+                    select.innerHTML = '<option value="root">Root Playlist (Home Page)</option>';
+                    folders.forEach(f => {
+                        const opt = document.createElement('option');
+                        opt.value = f._id;
+                        opt.innerText = f.name;
+                        select.appendChild(opt);
+                    });
+                }
+            } catch (e) {
+                console.warn('Could not load folders:', e);
+            }
+
+            document.getElementById('sendToFolderModal').classList.remove('hidden');
+        }
+
+        function closeSendToFolderModal() {
+            document.getElementById('sendToFolderModal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>

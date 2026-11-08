@@ -1,3 +1,4 @@
+
 # ----------------------------------------------------------------------
 # Stage 1: Build Stage (Only includes tools necessary for installation)
 # ----------------------------------------------------------------------
@@ -45,6 +46,8 @@ COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/pytho
 
 # Copy the application source code
 COPY --from=builder /app /app
+
+EXPOSE 8080
 
 # Command to run when the container starts
 CMD ["bash", "surf-tg.sh"]
