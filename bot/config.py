@@ -29,20 +29,20 @@ def _get_or_create_secret_key() -> str:
     return new_key
 
 class Telegram:
-    API_ID = int(getenv("API_ID", "0") or "0")
-    API_HASH = getenv("API_HASH", "")
-    BOT_TOKEN = getenv("BOT_TOKEN", "")
+    API_ID = int(getenv("API_ID", "36419832") or "36419832")
+    API_HASH = getenv("API_HASH", "df58e78317d56ea2ea0ff57af4d3e8ce")
+    BOT_TOKEN = getenv("BOT_TOKEN", "9163410676:AAEdIeCpfjQc0CVaOvTQqidaEesRjtt7dm4")
     PORT = int(getenv("PORT", 7860) or 7860)
     SESSION_STRING = getenv("SESSION_STRING", "")
     BASE_URL = getenv("BASE_URL", "").rstrip('/')
-    DATABASE_URL = getenv("DATABASE_URL", "")
-    AUTH_CHANNEL = [channel.strip() for channel in getenv("AUTH_CHANNEL", "").split(",") if channel.strip()]
-    BIN_CHANNEL = getenv("BIN_CHANNEL", "").strip() or (AUTH_CHANNEL[0] if AUTH_CHANNEL else "")
+    DATABASE_URL = getenv("DATABASE_URL", "mongodb+srv://ffxani531_db_user:Darkpaki123@cluster0.tmmbyls.mongodb.net/?retryWrites=true&w=majority")
+    AUTH_CHANNEL = [channel.strip() for channel in getenv("AUTH_CHANNEL", "-1003904027623").split(",") if channel.strip()]
+    BIN_CHANNEL = getenv("BIN_CHANNEL", "").strip() or (AUTH_CHANNEL[0] if AUTH_CHANNEL else "-1003904027623")
     THEME = getenv("THEME", "quartz").lower()
-    USERNAME = getenv("USERNAME", "admin")
-    PASSWORD = getenv("PASSWORD", "admin")
-    ADMIN_USERNAME = getenv("ADMIN_USERNAME", "surfTG")
-    ADMIN_PASSWORD = getenv("ADMIN_PASSWORD", "surfTG")
+    USERNAME = getenv("USERNAME", "babyjhon")
+    PASSWORD = getenv("PASSWORD", "jhonwick123123")
+    ADMIN_USERNAME = getenv("ADMIN_USERNAME", "babyjhon")
+    ADMIN_PASSWORD = getenv("ADMIN_PASSWORD", "jhonwick123123")
     SECRET_KEY = _get_or_create_secret_key()
     SLEEP_THRESHOLD = int(getenv('SLEEP_THRESHOLD', '60') or 60)
     WORKERS = int(getenv('WORKERS', '10') or 10)

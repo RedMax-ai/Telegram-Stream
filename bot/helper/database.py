@@ -138,6 +138,7 @@ class Database:
         
         self.is_mongo = USE_MONGO
         self._client = None
+        self._client_loop = None
         self._db = None
         self.sqlite = SQLiteBackend() if not self.is_mongo else None
         self._initialized = True
@@ -145,15 +146,28 @@ class Database:
 
     @property
     def mongo_client(self):
-        if self._client is None and self.is_mongo:
-            from motor.motor_asyncio import AsyncIOMotorClient
-            self._client = AsyncIOMotorClient(Telegram.DATABASE_URL)
+        if self.is_mongo:
+            try:
+                curr_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                curr_loop = None
+            if self._client is None or self._client_loop != curr_loop:
+                from motor.motor_asyncio import AsyncIOMotorClient
+                self._client_loop = curr_loop
+                self._client = AsyncIOMotorClient(
+                    Telegram.DATABASE_URL,
+                    serverSelectionTimeoutMS=4000,
+                    connectTimeoutMS=4000,
+                    socketTimeoutMS=5000,
+                    uuidRepresentation='standard'
+                )
+                self._db = self._client["surftg"]
         return self._client
 
     @property
     def db(self):
-        if self._db is None and self.is_mongo:
-            self._db = self.mongo_client["surftg"]
+        if (self._db is None or self._client is None) and self.is_mongo:
+            _ = self.mongo_client
         return self._db
 
     @property
@@ -176,8 +190,13 @@ class Database:
 
     async def create_indexes(self):
         if self.is_mongo:
-            await self.files.create_index([("title", "text"), ("chat_id", 1)])
-            await self.collection.create_index([("name", "text"), ("parent_folder", 1)])
+            try:
+                await asyncio.wait_for(asyncio.gather(
+                    self.files.create_index([("title", "text"), ("chat_id", 1)]),
+                    self.collection.create_index([("name", "text"), ("parent_folder", 1)])
+                ), timeout=4.0)
+            except Exception as e:
+                LOGGER.warning(f"Mongo index creation notice: {e}")
         else:
             # Already created in SQLite init
             pass
@@ -296,29 +315,37 @@ class Database:
 
     async def get_Dbfolder(self, parent_id="root", page=1, per_page=50):
         if self.is_mongo:
-            query = {"parent_folder": parent_id, "type": "folder"}
-            cursor = self.collection.find(query)
-            if parent_id != 'root':
-                offset = (int(page) - 1) * per_page
-                cursor = cursor.skip(offset).limit(per_page)
-            docs = await cursor.to_list(length=per_page if parent_id != 'root' else None)
-            for d in docs:
-                d['_id'] = str(d['_id'])
-            return docs
+            try:
+                query = {"parent_folder": parent_id, "type": "folder"}
+                cursor = self.collection.find(query)
+                if parent_id != 'root':
+                    offset = (int(page) - 1) * per_page
+                    cursor = cursor.skip(offset).limit(per_page)
+                docs = await asyncio.wait_for(cursor.to_list(length=per_page if parent_id != 'root' else 100), timeout=3.0)
+                for d in docs:
+                    d['_id'] = str(d['_id'])
+                return docs
+            except Exception as e:
+                LOGGER.warning(f"get_Dbfolder Mongo notice: {e}")
+                return []
         else:
-            offset = (int(page) - 1) * per_page
-            if parent_id == 'root':
-                rows = await self.sqlite.execute_query(
-                    "SELECT id, parent_folder, name, thumbnail, type FROM playlist WHERE parent_folder = 'root' AND type = 'folder' ORDER BY id DESC",
-                    fetch="all"
-                )
-            else:
-                rows = await self.sqlite.execute_query(
-                    "SELECT id, parent_folder, name, thumbnail, type FROM playlist WHERE parent_folder = ? AND type = 'folder' ORDER BY id DESC LIMIT ? OFFSET ?",
-                    (str(parent_id), per_page, offset),
-                    fetch="all"
-                )
-            return [{'_id': str(r['id']), 'parent_folder': r['parent_folder'], 'name': r['name'], 'thumbnail': r['thumbnail'], 'type': r['type']} for r in rows]
+            try:
+                offset = (int(page) - 1) * per_page
+                if parent_id == 'root':
+                    rows = await asyncio.wait_for(self.sqlite.execute_query(
+                        "SELECT id, parent_folder, name, thumbnail, type FROM playlist WHERE parent_folder = 'root' AND type = 'folder' ORDER BY id DESC",
+                        fetch="all"
+                    ), timeout=3.0)
+                else:
+                    rows = await asyncio.wait_for(self.sqlite.execute_query(
+                        "SELECT id, parent_folder, name, thumbnail, type FROM playlist WHERE parent_folder = ? AND type = 'folder' ORDER BY id DESC LIMIT ? OFFSET ?",
+                        (str(parent_id), per_page, offset),
+                        fetch="all"
+                    ), timeout=3.0)
+                return [{'_id': str(r['id']), 'parent_folder': r['parent_folder'], 'name': r['name'], 'thumbnail': r['thumbnail'], 'type': r['type']} for r in (rows or [])]
+            except Exception as e:
+                LOGGER.warning(f"get_Dbfolder SQLite notice: {e}")
+                return []
 
     async def get_dbFiles(self, parent_id=None, page=1, per_page=50):
         if self.is_mongo:
@@ -451,24 +478,36 @@ class Database:
 
     async def get_variable(self, key):
         if self.is_mongo:
-            bot_id = Telegram.BOT_TOKEN.split(":", 1)[0] if Telegram.BOT_TOKEN else "default"
-            config = await self.config.find_one({"_id": bot_id})
-            return config.get(key) if config is not None else None
+            try:
+                bot_id = Telegram.BOT_TOKEN.split(":", 1)[0] if Telegram.BOT_TOKEN else "default"
+                config = await asyncio.wait_for(self.config.find_one({"_id": bot_id}), timeout=2.5)
+                return config.get(key) if config is not None else None
+            except Exception as e:
+                LOGGER.warning(f"get_variable({key}) Mongo notice: {e}")
+                return None
         else:
-            row = await self.sqlite.execute_query(
-                "SELECT value FROM config WHERE key = ?",
-                (str(key),),
-                fetch="one"
-            )
-            return row['value'] if row else None
+            try:
+                row = await asyncio.wait_for(self.sqlite.execute_query(
+                    "SELECT value FROM config WHERE key = ?",
+                    (str(key),),
+                    fetch="one"
+                ), timeout=2.5)
+                return row['value'] if row else None
+            except Exception as e:
+                LOGGER.warning(f"get_variable({key}) SQLite notice: {e}")
+                return None
 
     async def list_tgfiles(self, id, page=1, per_page=50):
         if self.is_mongo:
-            from pymongo import DESCENDING
-            query = {'chat_id': id}
-            offset = (int(page) - 1) * per_page
-            cursor = self.files.find(query).sort('msg_id', DESCENDING).skip(offset).limit(per_page)
-            return await cursor.to_list(length=per_page)
+            try:
+                from pymongo import DESCENDING
+                query = {'chat_id': id}
+                offset = (int(page) - 1) * per_page
+                cursor = self.files.find(query).sort('msg_id', DESCENDING).skip(offset).limit(per_page)
+                return await asyncio.wait_for(cursor.to_list(length=per_page), timeout=3.5)
+            except Exception as e:
+                LOGGER.warning(f"list_tgfiles Mongo notice: {e}")
+                return []
         else:
             offset = (int(page) - 1) * per_page
             rows = await self.sqlite.execute_query(

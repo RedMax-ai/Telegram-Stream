@@ -1,12 +1,18 @@
+import asyncio
 from asyncio import gather, create_task
 from bot.helper.database import Database
 from bot.telegram import StreamBot
 from bot.config import Telegram
+from bot import LOGGER
 
 db = Database()
 
 async def get_chats():
-    AUTH_CHANNEL = await db.get_variable('auth_channel')
+    try:
+        AUTH_CHANNEL = await asyncio.wait_for(db.get_variable('auth_channel'), timeout=2.0)
+    except Exception:
+        AUTH_CHANNEL = None
+
     if AUTH_CHANNEL is None or str(AUTH_CHANNEL).strip() == '':
         channels_list = Telegram.AUTH_CHANNEL
     else:
@@ -20,21 +26,24 @@ async def get_chats():
         try:
             cid = int(channel_id)
             if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
-                chat = await StreamBot.get_chat(cid)
-                result.append({
-                    "chat-id": chat.id,
-                    "title": chat.title or chat.first_name or f"Channel {cid}",
-                    "type": getattr(chat.type, 'name', 'CHANNEL')
-                })
-            else:
-                result.append({
-                    "chat-id": cid,
-                    "title": f"Channel {cid}",
-                    "type": "CHANNEL"
-                })
+                try:
+                    chat = await asyncio.wait_for(StreamBot.get_chat(cid), timeout=2.0)
+                    result.append({
+                        "chat-id": chat.id,
+                        "title": chat.title or chat.first_name or f"Channel {cid}",
+                        "type": getattr(chat.type, 'name', 'CHANNEL')
+                    })
+                    continue
+                except Exception:
+                    pass
+            result.append({
+                "chat-id": cid,
+                "title": f"Channel {cid}",
+                "type": "CHANNEL"
+            })
         except Exception:
             result.append({
-                "chat-id": int(channel_id) if channel_id.lstrip('-').isdigit() else 0,
+                "chat-id": int(channel_id) if str(channel_id).lstrip('-').isdigit() else 0,
                 "title": f"Channel {channel_id}",
                 "type": "CHANNEL"
             })

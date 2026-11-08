@@ -1,5 +1,6 @@
 import re
 import time
+import asyncio
 from aiofiles import open as aiopen
 from os import path as ospath
 
@@ -36,11 +37,14 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
     if _theme_cache['value'] and (time.time() - _theme_cache['time'] < 60):
         theme = _theme_cache['value']
     else:
-        theme = await db.get_variable('theme')
-        if theme:
-            _theme_cache = {'value': theme, 'time': time.time()}
+        try:
+            theme = await asyncio.wait_for(db.get_variable('theme'), timeout=2.0)
+            if theme:
+                _theme_cache = {'value': theme, 'time': time.time()}
+        except Exception:
+            theme = None
     if theme is None or theme == '':
-        theme = Telegram.THEME
+        theme = Telegram.THEME or "quartz"
     tpath = ospath.join(ospath.dirname(__file__), 'template')
     
     # Pagination Logic
