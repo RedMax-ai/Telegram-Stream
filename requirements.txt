@@ -10,3 +10,10 @@ pymongo
 motor
 orjson
 psutil
+bcrypt
+aiosqlite
+gradio
+httpx
+fastapi
+uvicorn
+
