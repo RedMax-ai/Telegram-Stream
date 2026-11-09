@@ -1,214 +1,489 @@
 <!DOCTYPE html>
-
 <html class="dark" lang="en">
-
 <head>
     <meta charset="utf-8" />
-    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport" />
     <meta name="monetag" content="ed6b4132b8206ac2f074ea7f6718c421" />
-    <!-- Monetag MultiTag Ad Engine (Zone 307862) -->
+    <meta name="description" content="DarkPAKI Media Hub - High-speed cinema trailers, anime episodes, live streams, and 18+ VIP adult entertainment vault." />
+    <meta name="rating" content="RTA-5042-1996-1400-1577-RTA" />
+    <title>DarkPAKI - HD Cinema, Anime & 18+ VIP Media Hub</title>
+
+    <!-- Monetag MultiTag Ad Engine (Zone 307862 - Popunder, Push, Vignette, In-Page) -->
     <script src="https://quge5.com/88/tag.min.js" data-zone="307862" async data-cfasync="false"></script>
-    <title>Surf-TG Login</title>
-    <!-- Fonts -->
+
+    <!-- Google Fonts & Font Awesome -->
     <link href="https://fonts.googleapis.com" rel="preconnect" />
     <link crossorigin="" href="https://fonts.gstatic.com" rel="preconnect" />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;display=swap"
-        rel="stylesheet" />
-    <link
-        href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap"
-        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
-    <!-- Theme Config -->
-    <script id="tailwind-config">
+    <script>
         tailwind.config = {
             darkMode: "class",
             theme: {
                 extend: {
                     colors: {
-                        "primary": "#6467f2",
-                        "primary-hover": "#5254cf",
-                        "background-light": "#f6f6f8",
-                        "background-dark": "#101122",
-                        "surface-dark": "#1c1c27",
-                        "border-dark": "#282839",
+                        primary: "#f43f5e",
+                        "primary-hover": "#e11d48",
+                        brand: "#10b981",
+                        darkBg: "#06060a",
+                        cardBg: "#0f1017",
+                        surface: "#161722",
                     },
                     fontFamily: {
-                        "display": ["Inter", "sans-serif"]
-                    },
-                    backgroundImage: {
-                        'glass-gradient': 'linear-gradient(145deg, rgba(28, 28, 39, 0.7) 0%, rgba(16, 17, 34, 0.7) 100%)',
+                        sans: ["Outfit", "Inter", "sans-serif"],
                     }
-                },
-            },
-        }
+                }
+            }
+        };
     </script>
     <style>
-        /* Custom Glassmorphism Utilities */
+        ::-webkit-scrollbar { width: 5px; height: 5px; }
+        ::-webkit-scrollbar-track { background: #06060a; }
+        ::-webkit-scrollbar-thumb { background: #1f1f28; border-radius: 9999px; }
+        ::-webkit-scrollbar-thumb:hover { background: #f43f5e; }
+
         .glass-panel {
-            background: rgba(28, 28, 39, 0.4);
-            backdrop-filter: blur(12px);
-            -webkit-backdrop-filter: blur(12px);
-            border: 1px solid rgba(255, 255, 255, 0.05);
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            background: rgba(18, 18, 26, 0.75);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
         }
-
-        .input-glass {
-            background: rgba(16, 17, 34, 0.6) !important;
-            border-color: rgba(255, 255, 255, 0.1) !important;
+        .neon-card {
+            background: linear-gradient(180deg, rgba(22, 23, 34, 0.85) 0%, rgba(10, 10, 15, 0.95) 100%);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
         }
-
-        .input-glass:focus {
-            border-color: #6467f2 !important;
-            background: rgba(16, 17, 34, 0.9) !important;
+        .neon-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(244, 63, 94, 0.5);
+            box-shadow: 0 16px 36px -10px rgba(244, 63, 94, 0.35);
         }
-
-        /* Smooth Entry Animation */
-        @keyframes fadeSlideUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        @keyframes ambient-glow {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 0.16; }
+            50% { transform: translate(-45%, -48%) scale(1.15); opacity: 0.26; }
         }
-
-        .animate-entry {
-            animation: fadeSlideUp 0.6s ease-out forwards;
-        }
-
-        /* Mesh Gradient Background */
-        .mesh-bg {
-            background-color: #101122;
-            background-image:
-                radial-gradient(at 0% 0%, hsla(239, 83%, 67%, 0.15) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, hsla(239, 83%, 67%, 0.1) 0px, transparent 50%);
+        .ambient-light {
+            animation: ambient-glow 7s ease-in-out infinite;
         }
     </style>
 </head>
 
-<body
-    class="bg-background-dark text-white font-display min-h-screen flex flex-col relative overflow-x-hidden mesh-bg selection:bg-primary selection:text-white">
-    <!-- Top Navigation -->
-    <header class="w-full border-b border-white/5 px-6 py-4 z-20 absolute top-0 left-0">
-        <div class="max-w-7xl mx-auto flex items-center justify-between">
-            <div class="flex items-center gap-3 text-white">
-                <!-- Logo -->
-                <div class="w-8 h-8 text-primary">
-                    <svg class="w-full h-full drop-shadow-[0_0_8px_rgba(100,103,242,0.5)]" fill="none"
-                        viewbox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-                        <path
-                            d="M24 45.8096C19.6865 45.8096 15.4698 44.5305 11.8832 42.134C8.29667 39.7376 5.50128 36.3314 3.85056 32.3462C2.19985 28.361 1.76794 23.9758 2.60947 19.7452C3.451 15.5145 5.52816 11.6284 8.57829 8.5783C11.6284 5.52817 15.5145 3.45101 19.7452 2.60948C23.9758 1.76795 28.361 2.19986 32.3462 3.85057C36.3314 5.50129 39.7376 8.29668 42.134 11.8833C44.5305 15.4698 45.8096 19.6865 45.8096 24L24 24L24 45.8096Z"
-                            fill="currentColor"></path>
-                    </svg>
+<body class="bg-darkBg text-white font-sans min-h-screen flex flex-col selection:bg-primary selection:text-white overflow-x-hidden relative">
+
+    <!-- Ambient Glowing Background -->
+    <div class="pointer-events-none fixed top-0 left-1/4 -translate-x-1/2 w-[550px] h-[320px] bg-brand/15 blur-[140px] rounded-full z-0 ambient-light"></div>
+    <div class="pointer-events-none fixed top-28 right-1/4 translate-x-1/2 w-[500px] h-[300px] bg-primary/20 blur-[140px] rounded-full z-0 ambient-light" style="animation-delay: -3.5s;"></div>
+
+    <!-- Top Navigation Header -->
+    <header class="sticky top-0 z-40 glass-panel border-b border-white/10 px-4 sm:px-8 py-3.5 flex items-center justify-between">
+        <div class="flex items-center gap-3">
+            <a href="/" class="flex items-center gap-2 group">
+                <div class="w-9 h-9 rounded-xl bg-gradient-to-tr from-primary to-brand flex items-center justify-center shadow-lg shadow-primary/30 group-hover:scale-105 transition">
+                    <i class="fa-solid fa-play text-white text-sm"></i>
                 </div>
-                <h2 class="text-xl font-bold tracking-tight">Surf-TG</h2>
-            </div>
+                <div>
+                    <span class="text-lg sm:text-xl font-black tracking-tight text-white flex items-center gap-1.5">
+                        Dark<span class="text-primary">PAKI</span>
+                        <span class="text-[10px] uppercase font-mono px-2 py-0.5 rounded-full bg-brand/15 text-brand border border-brand/30">CDN Stream</span>
+                    </span>
+                </div>
+            </a>
+        </div>
+
+        <!-- Center Nav Categories -->
+        <div class="hidden md:flex items-center gap-6 text-xs font-semibold text-neutral-300">
+            <a href="#featured" class="hover:text-primary transition">Cinema & Shows</a>
+            <a href="#anime" class="hover:text-brand transition">Anime Showcase</a>
+            <a href="#vault" onclick="openAgeGateModal(); return false;" class="text-rose-400 hover:text-rose-300 flex items-center gap-1">
+                <i class="fa-solid fa-fire"></i> 18+ VIP Vault
+            </a>
+            <a href="#compliance" onclick="openPolicyModal('dmca'); return false;" class="hover:text-white transition">DMCA Policy</a>
+        </div>
+
+        <!-- Right Side: Telegram & Member Sign In -->
+        <div class="flex items-center gap-2.5">
+            <a href="https://t.me/weebzone_updates" target="_blank" class="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-sky-500/10 hover:bg-sky-500/20 text-sky-400 border border-sky-500/25 text-xs font-bold transition">
+                <i class="fa-brands fa-telegram"></i>
+                <span>Telegram</span>
+            </a>
+            <button onclick="openLoginModal()" class="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-primary to-primary-hover hover:brightness-110 active:scale-95 text-white text-xs font-bold shadow-lg shadow-primary/30 transition cursor-pointer">
+                <i class="fa-solid fa-lock text-[11px]"></i>
+                <span>Admin / Sign In</span>
+            </button>
         </div>
     </header>
-    <!-- Main Content Area -->
-    <main class="flex-grow flex items-center justify-center p-4 z-10 pt-20">
-        <!-- Login Card -->
-        <div
-            class="w-full max-w-[440px] glass-panel rounded-2xl p-8 sm:p-10 animate-entry relative overflow-hidden group/card">
-            <!-- Subtle top glow line -->
-            <div
-                class="absolute top-0 left-0 w-full h-[1px] bg-gradient-to-r from-transparent via-primary/50 to-transparent">
+
+    <!-- Main Public Content Area -->
+    <main class="relative z-10 flex-grow max-w-6xl w-full mx-auto px-4 sm:px-6 pt-6 pb-16 flex flex-col gap-10">
+
+        <!-- Hero Section -->
+        <section class="glass-panel rounded-3xl p-6 sm:p-10 border border-white/10 relative overflow-hidden flex flex-col md:flex-row items-center justify-between gap-8 shadow-2xl">
+            <div class="max-w-xl space-y-4 text-center md:text-left">
+                <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/25 text-primary text-xs font-bold">
+                    <span class="w-2 h-2 rounded-full bg-primary animate-ping"></span>
+                    <span>Ultra-Fast Cloud Video CDN Engine</span>
+                </div>
+                <h1 class="text-2xl sm:text-4xl font-black text-white leading-tight">
+                    Unlimited HD Cinema, Anime & <span class="text-transparent bg-clip-text bg-gradient-to-r from-primary via-rose-400 to-amber-400">Exclusive VIP Streams</span>
+                </h1>
+                <p class="text-neutral-300 text-xs sm:text-sm leading-relaxed">
+                    Powered by high-bandwidth Telegram direct caching and distributed edge servers. Stream in 4K/1080p with zero buffering, multi-language audio, and 1-click cloud downloading.
+                </p>
+                <div class="flex flex-wrap items-center justify-center md:justify-start gap-3 pt-2">
+                    <button onclick="openAgeGateModal()" class="px-5 py-3 rounded-2xl bg-gradient-to-r from-primary to-primary-hover hover:brightness-110 active:scale-95 text-white text-xs sm:text-sm font-bold shadow-xl shadow-primary/30 transition flex items-center gap-2 cursor-pointer">
+                        <i class="fa-solid fa-play"></i>
+                        <span>Enter 18+ VIP Vault</span>
+                    </button>
+                    <a href="https://t.me/weebzone_updates" target="_blank" class="px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/15 text-white text-xs sm:text-sm font-bold transition flex items-center gap-2">
+                        <i class="fa-brands fa-telegram text-sky-400"></i>
+                        <span>Join Community Channel</span>
+                    </a>
+                </div>
             </div>
 
+            <!-- Hero Video Preview Graphic -->
+            <div class="w-full max-w-md aspect-video rounded-2xl bg-cardBg border border-white/10 overflow-hidden relative group shadow-2xl flex items-center justify-center">
+                <div class="absolute inset-0 bg-gradient-to-t from-darkBg via-transparent to-transparent opacity-90 z-10"></div>
+                <img src="https://images.unsplash.com/photo-1536440136628-849c177e76a1?auto=format&fit=crop&w=800&q=80" alt="DarkPAKI Cinema Preview" class="w-full h-full object-cover group-hover:scale-105 transition duration-500" />
+                <button onclick="openAgeGateModal()" class="absolute z-20 w-16 h-16 rounded-full bg-primary/90 text-white flex items-center justify-center shadow-2xl shadow-primary/60 hover:scale-110 transition cursor-pointer">
+                    <i class="fa-solid fa-play text-xl translate-x-0.5"></i>
+                </button>
+                <div class="absolute bottom-3 left-4 z-20">
+                    <span class="bg-black/60 backdrop-blur-md px-2 py-0.5 rounded text-[10px] font-mono text-emerald-400 border border-emerald-500/30">4K HDR DIRECT CDN</span>
+                    <p class="text-white text-xs font-bold mt-1">DarkPAKI Media Showcase • Zero Lag</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- Highlights Row (Ad Network Quality Indicators) -->
+        <section class="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+            <div class="glass-panel p-4 rounded-2xl border border-white/5 text-center">
+                <i class="fa-solid fa-bolt text-brand text-xl mb-1.5"></i>
+                <h4 class="text-xs font-bold text-white">Ultra-Low Latency</h4>
+                <p class="text-[11px] text-neutral-400">Multi-threaded chunk streaming</p>
+            </div>
+            <div class="glass-panel p-4 rounded-2xl border border-white/5 text-center">
+                <i class="fa-solid fa-shield-halved text-sky-400 text-xl mb-1.5"></i>
+                <h4 class="text-xs font-bold text-white">DMCA Compliant</h4>
+                <p class="text-[11px] text-neutral-400">Strict copyright and takedown portal</p>
+            </div>
+            <div class="glass-panel p-4 rounded-2xl border border-white/5 text-center">
+                <i class="fa-solid fa-fingerprint text-amber-400 text-xl mb-1.5"></i>
+                <h4 class="text-xs font-bold text-white">18+ Verification</h4>
+                <p class="text-[11px] text-neutral-400">Protected adult content vault</p>
+            </div>
+            <div class="glass-panel p-4 rounded-2xl border border-white/5 text-center">
+                <i class="fa-solid fa-coins text-primary text-xl mb-1.5"></i>
+                <h4 class="text-xs font-bold text-white">Monetized Network</h4>
+                <p class="text-[11px] text-neutral-400">High-CPM sponsor ad delivery</p>
+            </div>
+        </section>
+
+        <!-- Featured Media Showcase (Shows ad reviewers genuine streaming layout) -->
+        <section id="featured" class="space-y-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-2">
+                    <span class="w-2.5 h-6 rounded-full bg-primary"></span>
+                    <h2 class="text-lg sm:text-xl font-black text-white">Trending Streams & Releases</h2>
+                </div>
+                <span class="text-xs text-neutral-400">Live Updating</span>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                <!-- Card 1 -->
+                <div class="neon-card rounded-2xl overflow-hidden flex flex-col group cursor-pointer" onclick="openAgeGateModal()">
+                    <div class="relative aspect-video overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1574375927938-d5a98e8ffe85?auto=format&fit=crop&w=600&q=80" alt="Cyberpunk Trailer" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                        <span class="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-[10px] font-mono text-white px-2 py-0.5 rounded">4K ULTRA</span>
+                        <span class="absolute bottom-2 left-2 bg-primary/90 text-white text-[10px] font-bold px-2 py-0.5 rounded">NEW RELEASE</span>
+                    </div>
+                    <div class="p-3.5 space-y-1.5">
+                        <h3 class="text-sm font-bold text-white group-hover:text-primary transition truncate">Dark Dimension: Cyberpunk Nights</h3>
+                        <p class="text-[11px] text-neutral-400 line-clamp-2">High-speed full length episode stream with custom audio track selector and fast CDN mirror.</p>
+                        <div class="flex items-center justify-between text-[10px] text-neutral-500 pt-1 border-t border-white/5">
+                            <span><i class="fa-solid fa-eye text-neutral-400 mr-1"></i> 24.8k views</span>
+                            <span class="text-brand font-semibold"><i class="fa-solid fa-circle-check mr-1"></i> Verified Safe</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 2 -->
+                <div class="neon-card rounded-2xl overflow-hidden flex flex-col group cursor-pointer" onclick="openAgeGateModal()">
+                    <div class="relative aspect-video overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1518709268805-4e9042af9f23?auto=format&fit=crop&w=600&q=80" alt="Anime Action" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                        <span class="absolute top-2 right-2 bg-black/70 backdrop-blur-md text-[10px] font-mono text-white px-2 py-0.5 rounded">1080P 60FPS</span>
+                        <span class="absolute bottom-2 left-2 bg-brand/90 text-white text-[10px] font-bold px-2 py-0.5 rounded">ANIME SERIES</span>
+                    </div>
+                    <div class="p-3.5 space-y-1.5">
+                        <h3 class="text-sm font-bold text-white group-hover:text-brand transition truncate">Anime Chronicle - Season 3</h3>
+                        <p class="text-[11px] text-neutral-400 line-clamp-2">Subbed & dubbed high bitrate anime streaming directly through Telegram cloud CDN servers.</p>
+                        <div class="flex items-center justify-between text-[10px] text-neutral-500 pt-1 border-t border-white/5">
+                            <span><i class="fa-solid fa-eye text-neutral-400 mr-1"></i> 58.2k views</span>
+                            <span class="text-brand font-semibold"><i class="fa-solid fa-circle-check mr-1"></i> Verified Safe</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Card 3 -->
+                <div class="neon-card rounded-2xl overflow-hidden flex flex-col group cursor-pointer" onclick="openAgeGateModal()">
+                    <div class="relative aspect-video overflow-hidden">
+                        <img src="https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=600&q=80" alt="VIP Adult Vault" class="w-full h-full object-cover group-hover:scale-105 transition duration-300" />
+                        <span class="absolute top-2 right-2 bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded">18+ RESTRICTED</span>
+                        <span class="absolute bottom-2 left-2 bg-amber-500/90 text-black text-[10px] font-black px-2 py-0.5 rounded">VIP VAULT</span>
+                    </div>
+                    <div class="p-3.5 space-y-1.5">
+                        <h3 class="text-sm font-bold text-white group-hover:text-rose-400 transition truncate">DarkPAKI Exclusive VIP Vault</h3>
+                        <p class="text-[11px] text-neutral-400 line-clamp-2">Private creator videos, late-night exclusive streams, and direct high-speed community downloads.</p>
+                        <div class="flex items-center justify-between text-[10px] text-neutral-500 pt-1 border-t border-white/5">
+                            <span><i class="fa-solid fa-lock text-rose-400 mr-1"></i> Age Verification Required</span>
+                            <span class="text-rose-400 font-semibold">18+ Only</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Comprehensive Compliance Footer (DMCA, Privacy, Terms, Age Gate) -->
+    <footer id="compliance" class="relative z-10 w-full border-t border-white/10 glass-panel mt-12 py-10 px-4 sm:px-8 text-neutral-400 text-xs">
+        <div class="max-w-6xl mx-auto grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+            <div class="md:col-span-2 space-y-3">
+                <div class="flex items-center gap-2">
+                    <div class="w-7 h-7 rounded-lg bg-gradient-to-tr from-primary to-brand flex items-center justify-center text-white text-xs font-bold">DP</div>
+                    <span class="text-white font-black text-sm tracking-wide">DARKPAKI MEDIA NETWORK</span>
+                </div>
+                <p class="text-[11px] text-neutral-400 leading-relaxed max-w-md">
+                    DarkPAKI CDN is a high-performance content delivery and media streaming platform. We respect intellectual property rights and strictly comply with the Digital Millennium Copyright Act (DMCA). Content flagged for removal is processed within 24 hours.
+                </p>
+                <div class="flex flex-wrap gap-2 pt-1">
+                    <span class="bg-brand/10 text-brand border border-brand/25 px-2 py-0.5 rounded text-[10px] font-mono">DMCA COMPLIANT</span>
+                    <span class="bg-sky-500/10 text-sky-400 border border-sky-500/25 px-2 py-0.5 rounded text-[10px] font-mono">SSL 256-BIT ENCRYPTED</span>
+                    <span class="bg-primary/10 text-primary border border-primary/25 px-2 py-0.5 rounded text-[10px] font-mono">18+ RTA COMPLIANT</span>
+                </div>
+            </div>
+
+            <div>
+                <h4 class="text-white font-bold text-xs uppercase tracking-wider mb-3">Legal & Compliance</h4>
+                <ul class="space-y-2 text-[11px]">
+                    <li><a href="#" onclick="openPolicyModal('dmca'); return false;" class="hover:text-primary transition">DMCA Copyright Policy</a></li>
+                    <li><a href="#" onclick="openPolicyModal('privacy'); return false;" class="hover:text-primary transition">Privacy & Cookie Policy</a></li>
+                    <li><a href="#" onclick="openPolicyModal('terms'); return false;" class="hover:text-primary transition">Terms of Service</a></li>
+                    <li><a href="#" onclick="openPolicyModal('age'); return false;" class="hover:text-primary transition">18+ Age Disclaimer</a></li>
+                </ul>
+            </div>
+
+            <div>
+                <h4 class="text-white font-bold text-xs uppercase tracking-wider mb-3">Quick Links</h4>
+                <ul class="space-y-2 text-[11px]">
+                    <li><a href="https://t.me/weebzone_updates" target="_blank" class="hover:text-sky-400 transition flex items-center gap-1.5"><i class="fa-brands fa-telegram text-sky-400"></i> Official Telegram</a></li>
+                    <li><a href="#" onclick="openAgeGateModal(); return false;" class="hover:text-primary transition flex items-center gap-1.5"><i class="fa-solid fa-key text-primary"></i> 18+ VIP Vault</a></li>
+                    <li><a href="#" onclick="openLoginModal(); return false;" class="hover:text-white transition flex items-center gap-1.5"><i class="fa-solid fa-user-shield text-neutral-400"></i> Admin Panel</a></li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="max-w-6xl mx-auto pt-6 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-3 text-[10px] text-neutral-500">
+            <p>© 2026 DarkPAKI Media Network. All rights reserved.</p>
+            <p>18+ adult material restricted to adults of legal age in their jurisdiction.</p>
+        </div>
+    </footer>
+
+    <!-- ============================================================================
+         MODAL 1: 18+ ADULT CONTENT WARNING & AGE VERIFICATION GATE
+         ============================================================================ -->
+    <div id="ageGateModal" class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-xl flex items-center justify-center p-4">
+        <div class="relative bg-cardBg border-2 border-primary/50 rounded-3xl max-w-md w-full p-6 sm:p-8 shadow-[0_0_60px_rgba(244,63,94,0.35)] flex flex-col items-center text-center gap-4">
+            <div class="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary to-rose-700 flex items-center justify-center shadow-2xl shadow-primary/50 border border-white/20">
+                <span class="text-2xl font-black text-white">18+</span>
+            </div>
+            <div>
+                <span class="bg-primary/20 text-primary border border-primary/40 text-[10px] font-black uppercase px-3 py-1 rounded-full">
+                    <i class="fa-solid fa-triangle-exclamation mr-1"></i> Adult Content Warning
+                </span>
+                <h2 class="text-xl font-black text-white mt-3">DarkPAKI 18+ VIP Entertainment</h2>
+                <p class="text-xs text-neutral-300 mt-2 leading-relaxed">
+                    This section contains mature 18+ creator streams, exclusive uncensored media, and reward features.
+                </p>
+                <p class="text-[11px] text-rose-300 font-semibold mt-1">
+                    You must be at least 18 years old (or legal age in your region) to proceed.
+                </p>
+            </div>
+            <div class="flex flex-col w-full gap-2 pt-2">
+                <button onclick="confirmAgeGate()" class="w-full bg-gradient-to-r from-primary to-primary-hover hover:brightness-110 active:scale-95 text-white font-black text-sm py-3.5 rounded-2xl shadow-xl shadow-primary/30 transition flex items-center justify-center gap-2 cursor-pointer">
+                    <i class="fa-solid fa-check"></i>
+                    <span>I AM 18 OR OLDER - ENTER (प्रवेश)</span>
+                </button>
+                <button onclick="closeAgeGateModal()" class="w-full bg-white/5 hover:bg-white/10 text-neutral-400 hover:text-white font-bold text-xs py-2.5 rounded-2xl border border-white/10 transition cursor-pointer">
+                    Under 18 - Exit (बाहर निकलें)
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ============================================================================
+         MODAL 2: ADMIN / MEMBER SIGN IN MODAL (Preserves Surf-TG Login Engine)
+         ============================================================================ -->
+    <div id="loginModal" class="hidden fixed inset-0 z-50 bg-black/85 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="relative w-full max-w-md glass-panel rounded-3xl p-6 sm:p-8 border border-white/15 shadow-2xl flex flex-col">
+            <button onclick="closeLoginModal()" class="absolute top-4 right-4 text-neutral-400 hover:text-white text-lg">
+                <i class="fa-solid fa-xmark"></i>
+            </button>
+
             <!-- Error Alert -->
-            <div id="errorPopup"
-                class="hidden mb-6 p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-200 text-sm flex items-center gap-2">
-                <span class="material-symbols-outlined text-[20px]">error</span>
+            <div id="errorPopup" class="hidden mb-4 p-3 rounded-xl bg-red-500/10 border border-red-500/25 text-red-200 text-xs flex items-center gap-2">
+                <i class="fa-solid fa-circle-exclamation text-red-400"></i>
                 <span><strong>Error:</strong> <!-- Error --></span>
             </div>
 
-            <!-- Header Section -->
-            <div class="flex flex-col items-center mb-8">
-                <h1 class="text-white tracking-tight text-3xl font-bold leading-tight text-center mb-2">Welcome Back
-                </h1>
-                <p class="text-gray-400 text-sm font-normal text-center">Stream your world with Surf-TG.</p>
+            <div class="text-center mb-6">
+                <div class="w-12 h-12 rounded-2xl bg-gradient-to-tr from-primary to-brand mx-auto flex items-center justify-center shadow-lg shadow-primary/30 mb-2">
+                    <i class="fa-solid fa-user-shield text-white text-lg"></i>
+                </div>
+                <h3 class="text-xl font-black text-white">DarkPAKI Member Portal</h3>
+                <p class="text-xs text-neutral-400 mt-1">Sign in to manage streams, channels and CDN files.</p>
             </div>
-            <!-- Login Form -->
-            <form class="flex flex-col gap-5" action="/login" method="post">
-                <input type="hidden" name="redirect_url" value="<!-- RedirectURL -->">
-                <!-- Username Field -->
-                <label class="flex flex-col gap-2">
-                    <span class="text-sm font-medium text-gray-300 ml-1">Username</span>
-                    <div class="relative group">
-                        <span
-                            class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-primary transition-colors duration-200">
-                            <span class="material-symbols-outlined text-[20px]">person</span>
-                        </span>
-                        <input
-                            class="input-glass form-input w-full rounded-xl text-white focus:ring-0 focus:ring-offset-0 h-12 pl-11 pr-4 placeholder:text-gray-600 text-sm transition-all duration-300 shadow-sm"
-                            placeholder="Username" type="text" name="username" id="exampleInputUsername" />
-                    </div>
+
+            <form class="flex flex-col gap-4" action="/login" method="post">
+                <input type="hidden" name="redirect_url" value="<!-- RedirectURL -->" />
+                <label class="flex flex-col gap-1.5 text-xs text-neutral-300">
+                    <span class="font-semibold">Username</span>
+                    <input class="w-full bg-surface border border-white/10 rounded-xl px-3.5 py-2.5 text-white text-sm focus:outline-none focus:border-primary" placeholder="Enter username" type="text" name="username" id="exampleInputUsername" required />
                 </label>
-                <!-- Password Field -->
-                <label class="flex flex-col gap-2">
-                    <div class="flex justify-between items-center ml-1">
-                        <span class="text-sm font-medium text-gray-300">Password</span>
-                    </div>
-                    <div class="relative group">
-                        <span
-                            class="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 group-focus-within:text-primary transition-colors duration-200">
-                            <span class="material-symbols-outlined text-[20px]">lock</span>
-                        </span>
-                        <input
-                            class="input-glass form-input w-full rounded-xl text-white focus:ring-0 focus:ring-offset-0 h-12 pl-11 pr-12 placeholder:text-gray-600 text-sm transition-all duration-300 shadow-sm"
-                            placeholder="Enter your password" type="password" name="password"
-                            id="exampleInputPassword1" />
-                        <button
-                            class="absolute right-0 top-0 h-full px-4 text-gray-500 hover:text-white transition-colors cursor-pointer flex items-center justify-center"
-                            type="button" onclick="togglePassword()">
-                            <span class="material-symbols-outlined text-[20px]" id="eyeIcon">visibility_off</span>
+                <label class="flex flex-col gap-1.5 text-xs text-neutral-300">
+                    <span class="font-semibold">Password</span>
+                    <div class="relative">
+                        <input class="w-full bg-surface border border-white/10 rounded-xl px-3.5 py-2.5 pr-10 text-white text-sm focus:outline-none focus:border-primary" placeholder="Enter password" type="password" name="password" id="exampleInputPassword1" required />
+                        <button type="button" onclick="togglePassword()" class="absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400 hover:text-white">
+                            <i id="eyeIcon" class="fa-regular fa-eye-slash"></i>
                         </button>
                     </div>
                 </label>
-                <!-- Submit Button -->
-                <button
-                    class="mt-2 w-full h-12 bg-primary hover:bg-primary-hover active:scale-[0.98] text-white text-sm font-bold rounded-xl shadow-[0_4px_14px_0_rgba(100,103,242,0.39)] hover:shadow-[0_6px_20px_rgba(100,103,242,0.23)] transition-all duration-300 flex items-center justify-center gap-2 group-hover/btn:translate-x-1"
-                    type="submit">
+                <button type="submit" class="mt-2 w-full py-3 rounded-xl bg-gradient-to-r from-primary to-primary-hover hover:brightness-110 active:scale-95 text-white text-xs font-black shadow-lg shadow-primary/30 transition flex items-center justify-center gap-2 cursor-pointer">
                     <span>Sign In</span>
-                    <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+                    <i class="fa-solid fa-arrow-right"></i>
                 </button>
             </form>
-            <!-- Footer of Card -->
-            <div class="mt-8 pt-6 border-t border-white/5 text-center">
-                <p class="text-sm text-gray-400">
-                    <a class="text-white font-semibold hover:text-primary transition-colors duration-200 ml-1"
-                        href="https://t.me/weebzone_updates">Surf-TG Updates</a>
-                </p>
+        </div>
+    </div>
+
+    <!-- ============================================================================
+         MODAL 3: LEGAL POLICY MODAL (DMCA, Privacy, Terms)
+         ============================================================================ -->
+    <div id="policyModal" class="hidden fixed inset-0 z-50 bg-black/90 backdrop-blur-md flex items-center justify-center p-4">
+        <div class="bg-cardBg border border-white/20 rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl flex flex-col max-h-[85vh]">
+            <div class="flex items-center justify-between pb-4 border-b border-white/10">
+                <div class="flex items-center gap-2.5">
+                    <div class="w-8 h-8 rounded-xl bg-brand/20 text-brand flex items-center justify-center">
+                        <i class="fa-solid fa-scale-balanced"></i>
+                    </div>
+                    <h3 id="policyModalTitle" class="font-black text-base text-white">Compliance Document</h3>
+                </div>
+                <button onclick="closePolicyModal()" class="text-neutral-400 hover:text-white text-lg">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            </div>
+            <div id="policyModalBody" class="py-4 text-xs text-neutral-300 space-y-3 overflow-y-auto leading-relaxed">
+            </div>
+            <div class="pt-4 border-t border-white/10 flex justify-end">
+                <button onclick="closePolicyModal()" class="px-5 py-2 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white transition">
+                    Close
+                </button>
             </div>
         </div>
-    </main>
-    <!-- Page Footer -->
-    <footer class="w-full py-6 text-center z-10">
-    </footer>
+    </div>
+
     <script>
         function togglePassword() {
             const input = document.getElementById('exampleInputPassword1');
             const icon = document.getElementById('eyeIcon');
             if (input.type === 'password') {
                 input.type = 'text';
-                icon.innerText = 'visibility';
+                icon.className = 'fa-regular fa-eye';
             } else {
                 input.type = 'password';
-                icon.innerText = 'visibility_off';
+                icon.className = 'fa-regular fa-eye-slash';
             }
         }
 
-        window.onload = function () {
+        function openLoginModal() {
+            document.getElementById('loginModal').classList.remove('hidden');
+        }
+        function closeLoginModal() {
+            document.getElementById('loginModal').classList.add('hidden');
+        }
+
+        function openAgeGateModal() {
+            document.getElementById('ageGateModal').classList.remove('hidden');
+        }
+        function closeAgeGateModal() {
+            document.getElementById('ageGateModal').classList.add('hidden');
+        }
+        function confirmAgeGate() {
+            closeAgeGateModal();
+            window.location.href = 'https://t.me/weebzone_updates';
+        }
+
+        function openPolicyModal(type) {
+            const titleEl = document.getElementById('policyModalTitle');
+            const bodyEl = document.getElementById('policyModalBody');
+            if (type === 'dmca') {
+                titleEl.innerText = 'Digital Millennium Copyright Act (DMCA) Notice';
+                bodyEl.innerHTML = `
+                    <p>DarkPAKI respects the intellectual property rights of copyright holders. All videos and files presented are indexed from decentralized cloud channels and user submissions.</p>
+                    <p class="font-bold text-white">Takedown Request Process:</p>
+                    <p>If you believe that your copyrighted work has been published on DarkPAKI without authorization, please notify our designated agent with:</p>
+                    <ul class="list-disc pl-5 space-y-1">
+                        <li>Exact title and URL of the infringing stream.</li>
+                        <li>Evidence of your copyright ownership or legal power of attorney.</li>
+                        <li>Your valid contact email address.</li>
+                    </ul>
+                    <p>All verified takedown requests are investigated and purged within 24 hours.</p>
+                `;
+            } else if (type === 'privacy') {
+                titleEl.innerText = 'Privacy & Cookie Disclosure';
+                bodyEl.innerHTML = `
+                    <p>We respect your privacy. DarkPAKI does not store personally identifiable credentials without your consent.</p>
+                    <p>We utilize browser cookies and session keys strictly for video playback state, age verification tokens, and anonymous visitor traffic analytics.</p>
+                    <p>Third-party advertising partners (such as Monetag and ExoClick) may deploy compliant ad delivery tags to serve relevant sponsored promotions.</p>
+                `;
+            } else if (type === 'terms') {
+                titleEl.innerText = 'Terms of Service';
+                bodyEl.innerHTML = `
+                    <p>By browsing DarkPAKI Media CDN, you affirm that you are at least 18 years of age (or legal majority in your country) and comply with local broadcasting laws.</p>
+                    <p>Commercial scraping, automated flooding, and unauthorized bot harvesting of stream endpoints are strictly prohibited.</p>
+                `;
+            } else {
+                titleEl.innerText = '18+ Adult Age Verification Policy';
+                bodyEl.innerHTML = `
+                    <p>Certain sections of DarkPAKI showcase mature creator streams and community adult requests.</p>
+                    <p>Access is restricted strictly to consenting adults aged 18 and older. If you are a minor, you must immediately exit this platform.</p>
+                `;
+            }
+            document.getElementById('policyModal').classList.remove('hidden');
+        }
+        function closePolicyModal() {
+            document.getElementById('policyModal').classList.add('hidden');
+        }
+
+        window.onload = function() {
             var errorContent = "<!-- Error -->";
             if (errorContent && errorContent.length > 0 && !errorContent.includes("<!--")) {
                 document.getElementById("errorPopup").classList.remove("hidden");
+                openLoginModal();
             }
         };
+
+        // Secret Admin shortcut: Ctrl+Shift+A
+        document.addEventListener('keydown', function(e) {
+            if (e.ctrlKey && e.shiftKey && (e.key === 'A' || e.key === 'a')) {
+                e.preventDefault();
+                openLoginModal();
+            }
+        });
     </script>
 </body>
-
 </html>
