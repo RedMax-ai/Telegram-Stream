@@ -36,6 +36,19 @@ from bot.telegram import StreamBot, sync_client_loop
 
 class_cache = {}
 
+def get_stream_client():
+    if not multi_clients:
+        if hasattr(StreamBot, "is_connected") and StreamBot.is_connected:
+            multi_clients[0] = StreamBot
+            work_loads[0] = 0
+        else:
+            return None, None
+    if not work_loads:
+        for k in list(multi_clients.keys()):
+            work_loads[k] = 0
+    idx = min(work_loads, key=work_loads.get)
+    return idx, multi_clients[idx]
+
 routes = web.RouteTableDef()
 db = Database()
 
@@ -762,16 +775,19 @@ async def delete_stream_route(request: web.Request):
     cache_key = f"{full_chat_id}:{msg_id}:{secure_hash}"
 
     # Delete from media_cache
-    if media_cache.collection:
-        doc = media_cache.collection.find_one({"cache_key": cache_key})
-        if doc and doc.get("file_path"):
-            try:
-                p = Path(doc["file_path"])
-                if p.exists():
-                    p.unlink(missing_ok=True)
-            except Exception as e:
-                logging.error(f"Failed to delete cached file from disk: {e}")
-        media_cache.collection.delete_one({"cache_key": cache_key})
+    if media_cache.collection is not None:
+        try:
+            doc = media_cache.collection.find_one({"cache_key": cache_key})
+            if doc and doc.get("file_path"):
+                try:
+                    p = Path(doc["file_path"])
+                    if p.exists():
+                        p.unlink(missing_ok=True)
+                except Exception as e:
+                    logging.error(f"Failed to delete cached file from disk: {e}")
+            media_cache.collection.delete_one({"cache_key": cache_key})
+        except Exception as e:
+            logging.warning(f"Failed to delete from media_cache collection: {e}")
 
     # Delete from files table
     await db.delete_file(full_chat_id, msg_id, secure_hash)
@@ -984,8 +1000,9 @@ async def get_subtitle(request):
             
             try:
                 # Get file properties
-                index = min(work_loads, key=work_loads.get)
-                faster_client = multi_clients[index]
+                index, faster_client = get_stream_client()
+                if faster_client is None:
+                    return web.HTTPNotFound(text="Telegram client not available")
                 
                 if faster_client in class_cache:
                     tg_connect = class_cache[faster_client]
@@ -1067,8 +1084,9 @@ async def get_subtitle_tracks(request):
             return web.HTTPBadRequest(text="Missing or invalid id or hash parameter")
         
         # Get file properties
-        index = min(work_loads, key=work_loads.get)
-        faster_client = multi_clients[index]
+        index, faster_client = get_stream_client()
+        if faster_client is None:
+            return web.HTTPNotFound(text="Telegram client not available")
         
         if faster_client in class_cache:
             tg_connect = class_cache[faster_client]
@@ -1218,23 +1236,26 @@ async def stream_from_cache(request: web.Request, cached_path, file_size: int, m
     is_download = request.query.get('dl', '').lower() in ('1', 'true') or request.query.get('download', '').lower() in ('1', 'true')
     disposition_type = "attachment" if is_download else "inline"
 
+    headers = {
+        "Content-Type": f"{mime_type}",
+        "Content-Length": str(req_length),
+        "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=31536000",
+        "Connection": "keep-alive",
+        "X-Content-Type-Options": "nosniff",
+        "X-Cache": "HIT",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Range",
+        "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+    }
+    if range_header:
+        headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
+
     return web.Response(
         status=206 if range_header else 200,
         body=file_sender(),
-        headers={
-            "Content-Type": f"{mime_type}",
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=31536000",
-            "Connection": "keep-alive",
-            "X-Content-Type-Options": "nosniff",
-            "X-Cache": "HIT",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Range",
-            "Access-Control-Expose-Headers": "Content-Range, Content-Length",
-        },
+        headers=headers,
     )
 
 
@@ -1272,10 +1293,13 @@ async def admin_dashboard(request):
         DESCENDING = -1
 
     cached_files = []
-    if media_cache.collection:
-        cached_files_cursor = media_cache.collection.find().sort("last_access", DESCENDING).limit(50)
-        for doc in cached_files_cursor:
-            cached_files.append(doc)
+    if media_cache.collection is not None:
+        try:
+            cached_files_cursor = media_cache.collection.find().sort("last_access", DESCENDING).limit(50)
+            for doc in cached_files_cursor:
+                cached_files.append(doc)
+        except Exception as e:
+            logging.warning(f"Failed to fetch cached files: {e}")
     
     rows_html = ""
     if not cached_files:
@@ -1380,7 +1404,12 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
     cached_path = media_cache.get_cached_path(chat_id, id, secure_hash)
     if cached_path and cached_path.exists():
         cache_key = f"{chat_id}:{id}:{secure_hash}"
-        doc = media_cache.collection.find_one({"cache_key": cache_key}) if media_cache.collection else None
+        doc = None
+        if media_cache.collection is not None:
+            try:
+                doc = media_cache.collection.find_one({"cache_key": cache_key})
+            except Exception as e:
+                logging.warning(f"Failed to query media_cache: {e}")
         file_size = (doc.get("file_size") if doc else None) or cached_path.stat().st_size
         mime_type = (doc.get("mime_type") if doc else None) or (mimetypes.guess_type(str(cached_path))[0] or "video/mp4")
         file_name = (doc.get("file_name") if doc else None) or cached_path.name
@@ -1391,11 +1420,9 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
         )
 
     # 2. Check Telegram clients availability
-    if not multi_clients:
+    index, faster_client = get_stream_client()
+    if faster_client is None:
         return web.HTTPNotFound(text="File not found in local cache and Telegram client not connected")
-
-    index = min(work_loads, key=work_loads.get)
-    faster_client = multi_clients[index]
 
     if Telegram.MULTI_CLIENT:
         logging.info(f"Client {index} is now serving {request.remote}")
@@ -1447,8 +1474,8 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
     if media_cache.enabled and media_cache._is_cacheable(mime_type, file_name):
         if not media_cache.is_downloading(chat_id, id, secure_hash):
             # Pick a different client for background download
-            bg_index = (index + 1) % len(multi_clients)
-            bg_client = multi_clients[bg_index]
+            bg_index = (index + 1) % len(multi_clients) if len(multi_clients) > 1 else index
+            bg_client = multi_clients.get(bg_index, faster_client)
             
             if bg_client in class_cache:
                 bg_tg_connect = class_cache[bg_client]
@@ -1504,23 +1531,26 @@ async def media_streamer(request: web.Request, chat_id: int, id: int, secure_has
     is_download = request.query.get('dl', '').lower() in ('1', 'true') or request.query.get('download', '').lower() in ('1', 'true')
     disposition_type = "attachment" if is_download else "inline"
 
+    headers = {
+        "Content-Type": f"{mime_type}",
+        "Content-Length": str(req_length),
+        "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=31536000",
+        "Connection": "keep-alive",
+        "X-Content-Type-Options": "nosniff",
+        "X-Cache": "MISS",
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "Range",
+        "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+    }
+    if range_header:
+        headers["Content-Range"] = f"bytes {from_bytes}-{until_bytes}/{file_size}"
+
     return web.Response(
         status=206 if range_header else 200,
         body=tg_connect.yield_file(
             file_id, index, offset, first_part_cut, last_part_cut, part_count, chunk_size
         ),
-        headers={
-            "Content-Type": f"{mime_type}",
-            "Content-Range": f"bytes {from_bytes}-{until_bytes}/{file_size}",
-            "Content-Length": str(req_length),
-            "Content-Disposition": f'{disposition_type}; filename="{file_name}"',
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "public, max-age=31536000",
-            "Connection": "keep-alive",
-            "X-Content-Type-Options": "nosniff",
-            "X-Cache": "MISS",
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Headers": "Range",
-            "Access-Control-Expose-Headers": "Content-Range, Content-Length",
-        },
+        headers=headers,
     )

@@ -30,6 +30,8 @@ class ByteStreamer:
 
     async def yield_file(self, file_id: FileId, index: int, offset: int, first_part_cut: int, last_part_cut: int, part_count: int, chunk_size: int) -> Union[str, None]: # type: ignore
         client = self.client
+        if index not in work_loads:
+            work_loads[index] = 0
         work_loads[index] += 1
         logging.debug(f"Starting to yielding file with client {index}.")
         media_session = await self.generate_media_session(client, file_id)
@@ -72,7 +74,8 @@ class ByteStreamer:
             logging.debug(f"Connection reset by client (client {index})")
         finally:
             logging.debug(f"Finished yielding file with {current_part} parts.")
-            work_loads[index] -= 1
+            if index in work_loads:
+                work_loads[index] = max(0, work_loads[index] - 1)
 
     async def generate_media_session(self, client: Client, file_id: FileId) -> Session:
         media_session = client.media_sessions.get(file_id.dc_id, None)

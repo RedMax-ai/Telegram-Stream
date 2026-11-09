@@ -458,6 +458,26 @@
             const videoPlayer = document.getElementById("player");
             videoPlayer.src = streamUrl;
 
+            // Player Status and Event Handlers
+            videoPlayer.addEventListener('error', (e) => {
+                console.warn("Video stream load error/event:", e);
+                const statusEl = document.getElementById("status-text");
+                if (statusEl) {
+                    statusEl.innerText = "Buffering...";
+                    statusEl.classList.remove("text-white");
+                    statusEl.classList.add("text-yellow-400");
+                }
+            });
+
+            videoPlayer.addEventListener('playing', () => {
+                const statusEl = document.getElementById("status-text");
+                if (statusEl) {
+                    statusEl.innerText = "Playing";
+                    statusEl.classList.remove("text-yellow-400");
+                    statusEl.classList.add("text-green-400");
+                }
+            });
+
             document.getElementById("download_link").href = streamUrl;
 
             // Fix Get File Button

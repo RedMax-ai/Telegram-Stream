@@ -908,6 +908,12 @@ class MediaCache:
         from bot.server.stream_routes import class_cache
         
         try:
+            if not multi_clients:
+                return
+            if not work_loads:
+                for k in list(multi_clients.keys()):
+                    work_loads[k] = 0
+
             # Select client
             index = min(work_loads, key=work_loads.get)
             client = multi_clients[index]
@@ -929,11 +935,8 @@ class MediaCache:
             
             # Start Download
             # Use a separate background client index to avoid interfering with current stream choice logic if possible
-            bg_index = (index + 1) % len(multi_clients)
-            
-            # Re-use start_background_download logic
-            # We need to pass the bg_connect matching bg_index
-            bg_client = multi_clients[bg_index]
+            bg_index = (index + 1) % len(multi_clients) if len(multi_clients) > 1 else index
+            bg_client = multi_clients.get(bg_index, client)
             if bg_client in class_cache:
                 bg_connect = class_cache[bg_client]
             else:

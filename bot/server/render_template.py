@@ -133,7 +133,12 @@ async def render_page(id, secure_hash, is_admin=False, html='', playlist='', dat
             size = get_readable_file_size(file_data.file_size)
         else:
             cache_key = f"{chat_id}:{id}:{secure_hash}"
-            doc = media_cache.collection.find_one({"cache_key": cache_key}) if media_cache.collection else None
+            doc = None
+            if media_cache.collection is not None:
+                try:
+                    doc = media_cache.collection.find_one({"cache_key": cache_key})
+                except Exception as e:
+                    LOGGER.warning("Could not query media_cache collection: %s", e)
             if doc:
                 filename = doc.get("file_name", f"Video_{id}")
                 tag = doc.get("mime_type", "video/mp4").split('/')[0].strip()
