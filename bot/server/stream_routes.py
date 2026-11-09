@@ -325,6 +325,21 @@ async def editConfig_route(request):
 # STREAM CDN & DIRECT LINK GENERATOR API ENDPOINTS (REAL & PERSISTENT)
 # =====================================================================
 
+API_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, X-API-Key, Range, X-Device-Id, Accept, Origin",
+    "Access-Control-Expose-Headers": "Content-Range, Content-Length, Accept-Ranges",
+}
+
+def json_cors(data, status=200):
+    return web.json_response(data, status=status, headers=API_CORS_HEADERS)
+
+@routes.options('/api/{tail:.*}')
+async def options_api_cors_handler(request: web.Request):
+    """Handle all CORS preflight requests for API endpoints."""
+    return web.Response(status=204, headers=API_CORS_HEADERS)
+
 @routes.post('/api/upload')
 async def upload_file_route(request: web.Request):
     """
@@ -338,7 +353,7 @@ async def upload_file_route(request: web.Request):
     api_key = request.headers.get('X-API-Key') or request.query.get('key')
     is_authorized = ('user' in session) or (api_key and (api_key == getattr(Telegram, 'STREAM_AUTH_KEY', '') or api_key == 'DarkPakiAdminSecret2026')) or (auth_header == 'Bearer DarkPakiAdminSecret2026')
     if not is_authorized:
-        return web.json_response({'error': 'Unauthorized. Please log in or provide API key.'}, status=401)
+        return json_cors({'error': 'Unauthorized. Please log in or provide API key.'}, status=401)
 
     try:
         reader = await request.multipart()
@@ -364,7 +379,7 @@ async def upload_file_route(request: web.Request):
                 disallowed_exts = {'.exe', '.bat', '.cmd', '.sh', '.py', '.js', '.vbs', '.php', '.pl', '.cgi'}
                 ext = os.path.splitext(file_name)[1].lower()
                 if ext in disallowed_exts:
-                    return web.json_response({'error': f'Disallowed file type: {ext}'}, status=400)
+                    return json_cors({'error': f'Disallowed file type: {ext}'}, status=400)
                 mime_type = mimetypes.guess_type(file_name)[0] or 'video/mp4'
                 temp_cache_id = int(time.time() * 1000) % 2147483647
                 temp_filename = f"temp_upload_{temp_cache_id}_{secrets.token_hex(4)}{ext or '.mp4'}"
@@ -380,7 +395,7 @@ async def upload_file_route(request: web.Request):
                         await f.write(chunk)
 
         if not target_path or not target_path.exists() or total_bytes == 0:
-            return web.json_response({'error': 'No file uploaded under key "file"'}, status=400)
+            return json_cors({'error': 'No file uploaded under key "file"'}, status=400)
 
         readable_size = get_readable_file_size(total_bytes)
         display_title = custom_title or file_name
@@ -515,7 +530,7 @@ async def upload_file_route(request: web.Request):
         watch_url = f"{base_url}/watch/{chat_id_url}?id={tg_msg_id}&hash={secure_hash}{key_param}"
         embed_code = f'<iframe src="{watch_url}" width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
 
-        return web.json_response({
+        return json_cors({
             'success': True,
             'file_name': file_name,
             'file_size': readable_size,
@@ -534,7 +549,7 @@ async def upload_file_route(request: web.Request):
         })
     except Exception as e:
         logging.error(f"Upload error: {e}", exc_info=True)
-        return web.json_response({'error': str(e)}, status=500)
+        return json_cors({'error': str(e)}, status=500)
 
 
 @routes.get('/api/status')
@@ -554,7 +569,7 @@ async def system_status_route(request: web.Request):
     channels_list = [c.strip() for c in db_auth_channel.split(',') if c.strip()] if db_auth_channel else Telegram.AUTH_CHANNEL
     storage_channel = channels_list[0] if channels_list else getattr(Telegram, 'BIN_CHANNEL', None)
 
-    return web.json_response({
+    return json_cors({
         'telegram_connected': bot_connected,
         'bot_username': bot_username,
         'storage_channel': storage_channel,
@@ -573,7 +588,7 @@ async def update_telegram_channel_route(request: web.Request):
     """
     session = await get_session(request)
     if not is_admin_user(session.get('user')):
-        return web.json_response({'error': 'Unauthorized'}, status=403)
+        return json_cors({'error': 'Unauthorized'}, status=403)
     
     try:
         data = await request.json()
@@ -582,14 +597,14 @@ async def update_telegram_channel_route(request: web.Request):
 
     channel = sanitize_input(data.get('auth_channel', '')).strip()
     if not channel:
-        return web.json_response({'error': 'Storage channel cannot be empty'}, status=400)
+        return json_cors({'error': 'Storage channel cannot be empty'}, status=400)
     
     await db.update_config(auth_channel=channel)
     Telegram.AUTH_CHANNEL = [c.strip() for c in channel.split(',') if c.strip()]
     if Telegram.AUTH_CHANNEL:
         Telegram.BIN_CHANNEL = Telegram.AUTH_CHANNEL[0]
 
-    return web.json_response({
+    return json_cors({
         'success': True,
         'message': f'Storage channel updated to: {channel}',
         'storage_channel': Telegram.BIN_CHANNEL,
@@ -608,7 +623,7 @@ async def generate_link_route(request: web.Request):
     api_key = request.headers.get('X-API-Key') or request.query.get('key')
     is_authorized = ('user' in session) or (api_key and (api_key == getattr(Telegram, 'STREAM_AUTH_KEY', '') or api_key == 'DarkPakiAdminSecret2026')) or (auth_header == 'Bearer DarkPakiAdminSecret2026')
     if not is_authorized:
-        return web.json_response({'error': 'Unauthorized'}, status=401)
+        return json_cors({'error': 'Unauthorized'}, status=401)
 
     try:
         data = await request.json()
@@ -641,7 +656,7 @@ async def generate_link_route(request: web.Request):
                     chat_id = f"-100{channel_name}" if channel_name.isdigit() else channel_name
 
     if not chat_id or not msg_id:
-        return web.json_response({'error': 'Invalid link or missing chat_id / msg_id'}, status=400)
+        return json_cors({'error': 'Invalid link or missing chat_id / msg_id'}, status=400)
 
     chat_id_int = int(str(chat_id).replace("-100", ""))
     full_chat_id = f"-100{chat_id_int}" if not str(chat_id).startswith("-100") else str(chat_id)
@@ -688,7 +703,7 @@ async def generate_link_route(request: web.Request):
     watch_url = f"{base_url}/watch/{chat_id_url}?id={msg_id_int}&hash={secure_hash}{key_param}"
     embed_code = f'<iframe src="{watch_url}" width="100%" height="100%" frameborder="0" allowfullscreen></iframe>'
 
-    return web.json_response({
+    return json_cors({
         'success': True,
         'file_name': file_name,
         'file_size': file_size_str,
