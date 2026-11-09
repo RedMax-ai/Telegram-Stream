@@ -60,6 +60,11 @@ async def favicon_route(request: web.Request):
     return web.Response(text="OK", status=200, content_type="text/plain")
 
 
+@routes.get('/0c17e0da78a5c5ca5650c8c1b10977c5.html')
+async def exoclick_verify_route(request: web.Request):
+    return web.Response(text="0c17e0da78a5c5ca5650c8c1b10977c5", status=200, content_type="text/html")
+
+
 def get_base_url(request: web.Request) -> str:
     if Telegram.BASE_URL:
         return Telegram.BASE_URL.rstrip('/')
