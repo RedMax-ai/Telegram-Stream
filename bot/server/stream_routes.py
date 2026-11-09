@@ -54,11 +54,8 @@ db = Database()
 
 
 @routes.get('/favicon.ico')
-@routes.head('/favicon.ico')
 @routes.get('/ping')
-@routes.head('/ping')
 @routes.get('/health')
-@routes.head('/health')
 async def favicon_route(request: web.Request):
     return web.Response(text="OK", status=200, content_type="text/plain")
 
